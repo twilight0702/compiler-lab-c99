@@ -17,10 +17,11 @@ BACKEND_REPO_URL="https://github.com/LJR-12138/IntermediateCodeGeneration.git"
 usage() {
   cat <<USAGE
 Usage:
-  $0 <input.c>
+  $0 [--lex <path/to/file.l>] [--yacc <path/to/file.y>] <input.c>
 
 Example:
   $0 sample_complex_input.c
+  $0 --lex src/parser_c99_yacc/c99.l --yacc src/parser_c99_yacc/c99.y sample_complex_input.c
 USAGE
 }
 
@@ -153,6 +154,8 @@ ensure_clean_cmake_build_dir() {
 
 run_pipeline() {
   local input_c="$1"
+  local lex_file_override="$2"
+  local yacc_file_override="$3"
 
   if [[ ! -f "${input_c}" ]]; then
     echo "[ERROR] Input C file not found: ${input_c}" >&2
@@ -182,8 +185,22 @@ run_pipeline() {
 
   mkdir -p "${generated_dir}" "${tokens_dir}" "${parse_dir}" "${backend_raw_dir}" "${backend_classes}" "${seulex_build}" "${yacc_build}"
 
-  local lex_file="${YACC_DIR}/c99.l"
-  local yacc_file="${YACC_DIR}/c99.y"
+  local lex_file="test_input/c99.l"
+  local yacc_file="test_input/c99.y"
+  if [[ -n "${lex_file_override}" ]]; then
+    lex_file="${lex_file_override}"
+  fi
+  if [[ -n "${yacc_file_override}" ]]; then
+    yacc_file="${yacc_file_override}"
+  fi
+  if [[ ! -f "${lex_file}" ]]; then
+    echo "[ERROR] Lex file not found: ${lex_file}" >&2
+    exit 1
+  fi
+  if [[ ! -f "${yacc_file}" ]]; then
+    echo "[ERROR] Yacc file not found: ${yacc_file}" >&2
+    exit 1
+  fi
 
   local generated_yy_c="${generated_dir}/c99.yy.c"
   local generated_tab_c="${generated_dir}/c99.tab.c"
@@ -474,9 +491,58 @@ main() {
     exit 1
   fi
 
+  local input_c=""
+  local lex_file_override=""
+  local yacc_file_override=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --lex)
+        shift
+        if [[ $# -eq 0 ]]; then
+          echo "[ERROR] --lex requires a file path" >&2
+          exit 1
+        fi
+        lex_file_override="$1"
+        ;;
+      --yacc)
+        shift
+        if [[ $# -eq 0 ]]; then
+          echo "[ERROR] --yacc requires a file path" >&2
+          exit 1
+        fi
+        yacc_file_override="$1"
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      -*)
+        echo "[ERROR] Unknown option: $1" >&2
+        usage
+        exit 1
+        ;;
+      *)
+        if [[ -n "${input_c}" ]]; then
+          echo "[ERROR] Multiple input files provided: ${input_c} and $1" >&2
+          usage
+          exit 1
+        fi
+        input_c="$1"
+        ;;
+    esac
+    shift
+  done
+
+  if [[ -z "${input_c}" ]]; then
+    echo "[ERROR] Missing input C file" >&2
+    usage
+    exit 1
+  fi
+
   check_basic_env
   prepare_repos
-  run_pipeline "$1"
+  run_pipeline "${input_c}" "${lex_file_override}" "${yacc_file_override}"
 }
 
 main "$@"
