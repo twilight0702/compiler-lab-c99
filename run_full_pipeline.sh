@@ -29,6 +29,14 @@ have_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
 
+line_buffer_run() {
+  if have_cmd stdbuf; then
+    stdbuf -oL -eL "$@"
+  else
+    "$@"
+  fi
+}
+
 require_cmd() {
   local cmd="$1"
   if ! have_cmd "$cmd"; then
@@ -185,8 +193,8 @@ run_pipeline() {
 
   mkdir -p "${generated_dir}" "${tokens_dir}" "${parse_dir}" "${backend_raw_dir}" "${backend_classes}" "${seulex_build}" "${yacc_build}"
 
-  local lex_file="test_input/c99.l"
-  local yacc_file="test_input/c99.y"
+  local lex_file="${YACC_DIR}/c99.l"
+  local yacc_file="${YACC_DIR}/c99.y"
   if [[ -n "${lex_file_override}" ]]; then
     lex_file="${lex_file_override}"
   fi
@@ -227,20 +235,20 @@ run_pipeline() {
 
   echo "[1/9] Build SeuLex"
   ensure_clean_cmake_build_dir "${SEULEX_DIR}" "${seulex_build}"
-  cmake -S "${SEULEX_DIR}" -B "${seulex_build}" >/dev/null
-  cmake --build "${seulex_build}" -j >/dev/null
+  line_buffer_run cmake -S "${SEULEX_DIR}" -B "${seulex_build}" >/dev/null
+  line_buffer_run cmake --build "${seulex_build}" -j
 
   echo "[2/9] Build yacc_parse_tool"
   ensure_clean_cmake_build_dir "${YACC_DIR}" "${yacc_build}"
-  cmake -S "${YACC_DIR}" -B "${yacc_build}" >/dev/null
-  cmake --build "${yacc_build}" -j >/dev/null
+  line_buffer_run cmake -S "${YACC_DIR}" -B "${yacc_build}" >/dev/null
+  line_buffer_run cmake --build "${yacc_build}" -j
 
   echo "[3/9] Generate scanner by SeuLex"
-  "${seulex_build}/SeuLex" -o "${generated_yy_c}" "${lex_file}" >/dev/null
+  line_buffer_run "${seulex_build}/SeuLex" -o "${generated_yy_c}" "${lex_file}" >/dev/null
   sed -i 's/^static char yytext\[SEULEX_YYTEXT_MAX\];/char yytext[SEULEX_YYTEXT_MAX];/' "${generated_yy_c}"
 
   echo "[4/9] Generate parser header by bison"
-  bison -d "${yacc_file}" -o "${generated_tab_c}" >/dev/null
+  line_buffer_run bison -d "${yacc_file}" -o "${generated_tab_c}" >/dev/null
   cp -f "${generated_tab_h}" "${generated_y_tab_h}"
 
   awk '
@@ -377,16 +385,16 @@ int main(int argc, char **argv) {
 C_EOF
 
   echo "[5/9] Build token dumper"
-  if ! cc -std=gnu89 -w -DECHO='((void)0)' -I"${generated_dir}" \
+  if ! line_buffer_run cc -std=gnu89 -w -DECHO='((void)0)' -I"${generated_dir}" \
     "${token_dump_main_c}" "${generated_yy_c}" -lfl -o "${token_dumper_bin}"; then
     echo "[WARN] build with -lfl failed, retry without -lfl"
-    cc -std=gnu89 -w -DECHO='((void)0)' -I"${generated_dir}" \
+    line_buffer_run cc -std=gnu89 -w -DECHO='((void)0)' -I"${generated_dir}" \
       "${token_dump_main_c}" "${generated_yy_c}" -o "${token_dumper_bin}"
   fi
 
   echo "[6/9] Lex input C -> token files"
   awk '!/^[[:space:]]*#/' "${abs_input}" > "${lex_input_c}"
-  "${token_dumper_bin}" "${lex_input_c}" "${tokens_rich}"
+  line_buffer_run "${token_dumper_bin}" "${lex_input_c}" "${tokens_rich}"
   awk '{print $1}' "${tokens_rich}" > "${tokens_plain}"
 
   awk 'BEGIN{OFS="\t"; print "index","type","lexeme","line","col"} {print NR-1,$1,$2,$3,$4}' \
@@ -419,7 +427,7 @@ C_EOF
   mkdir -p "${parser_export_dir}"
 
   pushd "${ROOT_DIR}" >/dev/null
-  "${yacc_build}/src/yacc_parse_tool" "${yacc_file}" \
+  line_buffer_run "${yacc_build}/src/yacc_parse_tool" "${yacc_file}" \
     --parse-tokens "${tokens_plain}" \
     --export \
     --export-dir "${parser_export_dir}" \
@@ -436,7 +444,7 @@ C_EOF
   if have_cmd mvn; then
     echo "[8/9] Build backend with Maven (resolve deps: soot/opencsv/...)"
     pushd "${BACKEND_DIR}" >/dev/null
-    mvn -q -DskipTests compile dependency:build-classpath -Dmdep.outputFile="${backend_cp_file}"
+    line_buffer_run mvn -q -DskipTests compile dependency:build-classpath -Dmdep.outputFile="${backend_cp_file}"
     popd >/dev/null
     backend_cp="${BACKEND_DIR}/target/classes:$(cat "${backend_cp_file}")"
   else
@@ -449,14 +457,14 @@ C_EOF
       echo "        Install Maven, or place backend dependency jars under backend repo." >&2
       exit 1
     fi
-    javac -encoding UTF-8 -cp "${dep_jars}" -d "${backend_classes}" \
+    line_buffer_run javac -encoding UTF-8 -cp "${dep_jars}" -d "${backend_classes}" \
       $(find "${BACKEND_DIR}/src/main/java" -type f -name '*.java')
     backend_cp="${backend_classes}:${dep_jars}"
     printf "%s\n" "${backend_cp}" > "${backend_cp_file}"
   fi
 
   echo "[9/9] Generate intermediate code"
-  java -cp "${backend_cp}" com.compiler.backend.Main "${backend_raw_dir}/" \
+  line_buffer_run java -cp "${backend_cp}" com.compiler.backend.Main "${backend_raw_dir}/" \
     | tee "${backend_log}"
 
   if [[ -f "${backend_dir}/output.jimple" ]]; then
