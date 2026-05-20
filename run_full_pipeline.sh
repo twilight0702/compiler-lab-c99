@@ -17,11 +17,12 @@ BACKEND_REPO_URL="https://github.com/LJR-12138/IntermediateCodeGeneration.git"
 usage() {
   cat <<USAGE
 Usage:
-  $0 [--auto-pull] [--lex <path/to/file.l>] [--yacc <path/to/file.y>] <input.c>
+  $0 [--auto-pull] [--skip-repo-check] [--lex <path/to/file.l>] [--yacc <path/to/file.y>] <input.c>
 
 Example:
   $0 sample_complex_input.c
   $0 --auto-pull --lex src/parser_c99_yacc/c99.l --yacc src/parser_c99_yacc/c99.y sample_complex_input.c
+  $0 --skip-repo-check sample_complex_input.c
 USAGE
 }
 
@@ -52,7 +53,6 @@ check_basic_env() {
   require_cmd gcc
   require_cmd g++
   require_cmd cc
-  require_cmd bison
   require_cmd java
   require_cmd javac
   require_cmd mvn
@@ -63,7 +63,6 @@ check_basic_env() {
   echo "[Env] Tool versions:"
   echo "  - gcc:    $(gcc --version | head -n1)"
   echo "  - cmake:  $(cmake --version | head -n1)"
-  echo "  - bison:  $(bison --version | head -n1)"
   echo "  - java:   $(java -version 2>&1 | head -n1)"
   echo "  - javac:  $(javac -version 2>&1 | head -n1)"
   echo "  - maven:  $(mvn -version 2>&1 | head -n1)"
@@ -75,6 +74,7 @@ clone_or_check_repo() {
   local repo_url="$2"
   local name="$3"
   local auto_pull="$4"
+  local skip_repo_check="$5"
 
   if [[ ! -d "${local_dir}" ]]; then
     echo "[Repo] Cloning ${name} -> ${local_dir}"
@@ -93,6 +93,11 @@ clone_or_check_repo() {
     echo "[WARN] ${name} origin mismatch"
     echo "       expected: ${repo_url}"
     echo "       actual:   ${current_remote}"
+  fi
+
+  if [[ "${skip_repo_check}" == "1" ]]; then
+    echo "[Repo] Skipping remote update check for ${name} (--skip-repo-check)."
+    return
   fi
 
   echo "[Repo] Checking updates for ${name}..."
@@ -158,10 +163,11 @@ clone_or_check_repo() {
 
 prepare_repos() {
   local auto_pull="$1"
+  local skip_repo_check="$2"
   mkdir -p "${SRC_DIR}"
-  clone_or_check_repo "${SEULEX_DIR}" "${SEULEX_REPO_URL}" "seulex" "${auto_pull}"
-  clone_or_check_repo "${YACC_DIR}" "${YACC_REPO_URL}" "c99-yacc-lr-lalr-practice" "${auto_pull}"
-  clone_or_check_repo "${BACKEND_DIR}" "${BACKEND_REPO_URL}" "IntermediateCodeGeneration" "${auto_pull}"
+  clone_or_check_repo "${SEULEX_DIR}" "${SEULEX_REPO_URL}" "seulex" "${auto_pull}" "${skip_repo_check}"
+  clone_or_check_repo "${YACC_DIR}" "${YACC_REPO_URL}" "c99-yacc-lr-lalr-practice" "${auto_pull}" "${skip_repo_check}"
+  clone_or_check_repo "${BACKEND_DIR}" "${BACKEND_REPO_URL}" "IntermediateCodeGeneration" "${auto_pull}" "${skip_repo_check}"
 }
 
 ensure_clean_cmake_build_dir() {
@@ -229,8 +235,6 @@ run_pipeline() {
   fi
 
   local generated_yy_c="${generated_dir}/c99.yy.c"
-  local generated_tab_c="${generated_dir}/c99.tab.c"
-  local generated_tab_h="${generated_dir}/c99.tab.h"
   local generated_y_tab_h="${generated_dir}/y.tab.h"
   local token_cases_inc="${generated_dir}/token_cases.inc"
   local token_dump_main_c="${generated_dir}/token_dump_main.c"
@@ -265,35 +269,17 @@ run_pipeline() {
   line_buffer_run "${seulex_build}/SeuLex" -o "${generated_yy_c}" "${lex_file}" >/dev/null
   sed -i 's/^static char yytext\[SEULEX_YYTEXT_MAX\];/char yytext[SEULEX_YYTEXT_MAX];/' "${generated_yy_c}"
 
-  echo "[4/9] Generate parser header by bison"
-  line_buffer_run bison -d "${yacc_file}" -o "${generated_tab_c}" >/dev/null
-  cp -f "${generated_tab_h}" "${generated_y_tab_h}"
-
-  awk '
-    /enum yytokentype/ { in_enum=1; next }
-    in_enum && /^  };/ { in_enum=0; next }
-    in_enum {
-      if ($0 ~ /^[[:space:]]*[A-Z_][A-Z0-9_]*[[:space:]]*=[[:space:]]*[0-9-]+/) {
-        line=$0
-        gsub(/,/, "", line)
-        split(line, arr, "=")
-        name=arr[1]
-        value=arr[2]
-        gsub(/[[:space:]]/, "", name)
-        gsub(/[[:space:]]/, "", value)
-        if (name != "YYEMPTY" && name != "YYEOF" && name != "YYerror" && name != "YYUNDEF") {
-          printf("    case %s: return \"%s\";\n", name, name)
-        }
-      }
-    }
-  ' "${generated_tab_h}" > "${token_cases_inc}"
+  echo "[4/9] Export parser headers from yacc_parse_tool"
+  line_buffer_run "${yacc_build}/src/yacc_parse_tool" "${yacc_file}" \
+    --emit-y-tab-h "${generated_y_tab_h}" \
+    --emit-token-cases-inc "${token_cases_inc}" >/dev/null
 
   cat > "${token_dump_main_c}" <<'C_EOF'
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "c99.tab.h"
+#include "y.tab.h"
 
 int yylex(void);
 extern char yytext[];
@@ -505,11 +491,15 @@ main() {
   local lex_file_override=""
   local yacc_file_override=""
   local auto_pull="0"
+  local skip_repo_check="0"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --auto-pull)
         auto_pull="1"
+        ;;
+      --skip-repo-check)
+        skip_repo_check="1"
         ;;
       --lex)
         shift
@@ -555,7 +545,7 @@ main() {
   fi
 
   check_basic_env
-  prepare_repos "${auto_pull}"
+  prepare_repos "${auto_pull}" "${skip_repo_check}"
   run_pipeline "${input_c}" "${lex_file_override}" "${yacc_file_override}"
 }
 

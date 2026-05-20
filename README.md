@@ -9,6 +9,7 @@
 
 - 一键执行完整流水线：`lex -> yacc parse -> intermediate codegen`
 - 自动准备/校验依赖仓库（seulex、c99-yacc-lr-lalr-practice、IntermediateCodeGeneration）
+- 支持跳过仓库远端新提交检查：`--skip-repo-check`
 - 输出结构化产物：token、解析日志、解析轨迹、Jimple 中间代码
 - 支持自定义 `.l/.y` 文件覆盖默认语法定义
 
@@ -19,10 +20,14 @@
 - `git`
 - `cmake`
 - `gcc` / `g++` / `cc`
-- `bison`
 - `java` / `javac`
 - `awk` / `sed` / `find`
 - `mvn`（可选，缺失时回退为 `javac + 本地 jar`）
+
+说明：
+
+- 主 pipeline 不再依赖 `bison`。
+- 若需要执行 `src/parser_c99_yacc` 子仓库中的 bison 对拍测试（tests 2/2f），再单独安装 `bison`。
 
 ## 快速开始
 
@@ -39,6 +44,14 @@
   --lex test_input/c99.l \
   --yacc test_input/c99.y \
   test_input/sample_pipeline_valid.c
+```
+
+### 3. 跳过仓库远端提交检查
+
+适用于离线环境、网络受限，或你明确只想使用当前本地子仓库代码时：
+
+```bash
+./run_full_pipeline.sh --skip-repo-check test_input/sample_pipeline_valid.c
 ```
 
 ## 输出说明
