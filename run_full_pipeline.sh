@@ -17,11 +17,11 @@ BACKEND_REPO_URL="https://github.com/LJR-12138/IntermediateCodeGeneration.git"
 usage() {
   cat <<USAGE
 Usage:
-  $0 [--lex <path/to/file.l>] [--yacc <path/to/file.y>] <input.c>
+  $0 [--auto-pull] [--lex <path/to/file.l>] [--yacc <path/to/file.y>] <input.c>
 
 Example:
   $0 sample_complex_input.c
-  $0 --lex src/parser_c99_yacc/c99.l --yacc src/parser_c99_yacc/c99.y sample_complex_input.c
+  $0 --auto-pull --lex src/parser_c99_yacc/c99.l --yacc src/parser_c99_yacc/c99.y sample_complex_input.c
 USAGE
 }
 
@@ -55,11 +55,7 @@ check_basic_env() {
   require_cmd bison
   require_cmd java
   require_cmd javac
-  if have_cmd mvn; then
-    :
-  else
-    echo "[WARN] Maven not found. Backend build will fallback to local jars if available."
-  fi
+  require_cmd mvn
   require_cmd awk
   require_cmd sed
   require_cmd find
@@ -70,6 +66,7 @@ check_basic_env() {
   echo "  - bison:  $(bison --version | head -n1)"
   echo "  - java:   $(java -version 2>&1 | head -n1)"
   echo "  - javac:  $(javac -version 2>&1 | head -n1)"
+  echo "  - maven:  $(mvn -version 2>&1 | head -n1)"
 
 }
 
@@ -77,6 +74,7 @@ clone_or_check_repo() {
   local local_dir="$1"
   local repo_url="$2"
   local name="$3"
+  local auto_pull="$4"
 
   if [[ ! -d "${local_dir}" ]]; then
     echo "[Repo] Cloning ${name} -> ${local_dir}"
@@ -99,21 +97,24 @@ clone_or_check_repo() {
 
   echo "[Repo] Checking updates for ${name}..."
   if ! git -C "${local_dir}" fetch --quiet origin; then
-    echo "[WARN] fetch failed for ${name}; continue with local copy"
-    return
+    echo "[ERROR] fetch failed for ${name}; cannot verify remote commit status" >&2
+    exit 1
   fi
 
-  local branch
+  local branch upstream
   branch=$(git -C "${local_dir}" symbolic-ref --short HEAD 2>/dev/null || true)
   if [[ -z "${branch}" ]]; then
-    echo "[WARN] ${name} detached HEAD; skip auto update check"
-    return
+    echo "[ERROR] ${name} is in detached HEAD; cannot safely compare with remote." >&2
+    exit 1
   fi
 
-  local upstream="origin/${branch}"
+  upstream=$(git -C "${local_dir}" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)
+  if [[ -z "${upstream}" ]]; then
+    upstream="origin/${branch}"
+  fi
   if ! git -C "${local_dir}" rev-parse --verify "${upstream}" >/dev/null 2>&1; then
-    echo "[WARN] ${name} upstream ${upstream} not found; skip auto update check"
-    return
+    echo "[ERROR] ${name} upstream ${upstream} not found; cannot verify remote commit status." >&2
+    exit 1
   fi
 
   local counts ahead behind
@@ -121,14 +122,29 @@ clone_or_check_repo() {
   ahead=${counts%% *}
   behind=${counts##* }
 
+  local local_head remote_head
+  local_head=$(git -C "${local_dir}" log -1 --pretty='format:%h %cs %s')
+  remote_head=$(git -C "${local_dir}" log -1 --pretty='format:%h %cs %s' "${upstream}")
+  echo "[Repo] ${name} local  HEAD: ${local_head}"
+  echo "[Repo] ${name} remote HEAD: ${remote_head} (${upstream})"
+
   if [[ "${behind}" -gt 0 ]]; then
     echo "[Repo] ${name} is behind ${upstream} by ${behind} commit(s)."
-    read -r -p "       Pull latest now? [y/N]: " ans
-    ans=${ans:-N}
-    if [[ "${ans}" =~ ^[Yy]$ ]]; then
+    if [[ "${auto_pull}" == "1" ]]; then
+      echo "[Repo] Auto-pull enabled, pulling latest with --ff-only..."
       git -C "${local_dir}" pull --ff-only
+    elif [[ -t 0 ]]; then
+      read -r -p "       Pull latest now? [y/N]: " ans
+      ans=${ans:-N}
+      if [[ "${ans}" =~ ^[Yy]$ ]]; then
+        git -C "${local_dir}" pull --ff-only
+      else
+        echo "[ERROR] ${name} is behind remote. Please pull latest and re-run." >&2
+        exit 1
+      fi
     else
-      echo "[Repo] Keep local ${name} unchanged."
+      echo "[ERROR] ${name} is behind remote and no TTY for prompt. Re-run with --auto-pull or pull manually." >&2
+      exit 1
     fi
   else
     echo "[Repo] ${name} is up-to-date on ${branch}."
@@ -140,10 +156,11 @@ clone_or_check_repo() {
 }
 
 prepare_repos() {
+  local auto_pull="$1"
   mkdir -p "${SRC_DIR}"
-  clone_or_check_repo "${SEULEX_DIR}" "${SEULEX_REPO_URL}" "seulex"
-  clone_or_check_repo "${YACC_DIR}" "${YACC_REPO_URL}" "c99-yacc-lr-lalr-practice"
-  clone_or_check_repo "${BACKEND_DIR}" "${BACKEND_REPO_URL}" "IntermediateCodeGeneration"
+  clone_or_check_repo "${SEULEX_DIR}" "${SEULEX_REPO_URL}" "seulex" "${auto_pull}"
+  clone_or_check_repo "${YACC_DIR}" "${YACC_REPO_URL}" "c99-yacc-lr-lalr-practice" "${auto_pull}"
+  clone_or_check_repo "${BACKEND_DIR}" "${BACKEND_REPO_URL}" "IntermediateCodeGeneration" "${auto_pull}"
 }
 
 ensure_clean_cmake_build_dir() {
@@ -441,27 +458,11 @@ C_EOF
   local backend_cp_file="${backend_dir}/backend.classpath"
   local backend_cp=""
 
-  if have_cmd mvn; then
-    echo "[8/9] Build backend with Maven (resolve deps: soot/opencsv/...)"
-    pushd "${BACKEND_DIR}" >/dev/null
-    line_buffer_run mvn -q -DskipTests compile dependency:build-classpath -Dmdep.outputFile="${backend_cp_file}"
-    popd >/dev/null
-    backend_cp="${BACKEND_DIR}/target/classes:$(cat "${backend_cp_file}")"
-  else
-    echo "[8/9] Build backend with javac fallback (no Maven)"
-    find "${backend_classes}" -type f -name '*.class' -delete
-    local dep_jars
-    dep_jars=$(find "${BACKEND_DIR}" -type f -name '*.jar' ! -path '*/target/*' | tr '\n' ':')
-    if [[ -z "${dep_jars}" ]]; then
-      echo "[ERROR] Maven not found and no dependency jars found under ${BACKEND_DIR}" >&2
-      echo "        Install Maven, or place backend dependency jars under backend repo." >&2
-      exit 1
-    fi
-    line_buffer_run javac -encoding UTF-8 -cp "${dep_jars}" -d "${backend_classes}" \
-      $(find "${BACKEND_DIR}/src/main/java" -type f -name '*.java')
-    backend_cp="${backend_classes}:${dep_jars}"
-    printf "%s\n" "${backend_cp}" > "${backend_cp_file}"
-  fi
+  echo "[8/9] Build backend with Maven (resolve deps: soot/opencsv/...)"
+  pushd "${BACKEND_DIR}" >/dev/null
+  line_buffer_run mvn -q -DskipTests compile dependency:build-classpath -Dmdep.outputFile="${backend_cp_file}"
+  popd >/dev/null
+  backend_cp="${BACKEND_DIR}/target/classes:$(cat "${backend_cp_file}")"
 
   echo "[9/9] Generate intermediate code"
   line_buffer_run java -cp "${backend_cp}" com.compiler.backend.Main "${backend_raw_dir}/" \
@@ -502,9 +503,13 @@ main() {
   local input_c=""
   local lex_file_override=""
   local yacc_file_override=""
+  local auto_pull="0"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --auto-pull)
+        auto_pull="1"
+        ;;
       --lex)
         shift
         if [[ $# -eq 0 ]]; then
@@ -549,7 +554,7 @@ main() {
   fi
 
   check_basic_env
-  prepare_repos
+  prepare_repos "${auto_pull}"
   run_pipeline "${input_c}" "${lex_file_override}" "${yacc_file_override}"
 }
 
