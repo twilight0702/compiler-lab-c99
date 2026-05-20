@@ -119,8 +119,9 @@ clone_or_check_repo() {
 
   local counts ahead behind
   counts=$(git -C "${local_dir}" rev-list --left-right --count HEAD..."${upstream}")
-  ahead=${counts%% *}
-  behind=${counts##* }
+  read -r ahead behind <<< "${counts}"
+  ahead=${ahead:-0}
+  behind=${behind:-0}
 
   local local_head remote_head
   local_head=$(git -C "${local_dir}" log -1 --pretty='format:%h %cs %s')
