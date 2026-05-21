@@ -54,6 +54,27 @@
 ./run_full_pipeline.sh --skip-repo-check test_input/sample_pipeline_valid.c
 ```
 
+## 脚本流程（run_full_pipeline.sh）
+
+脚本会先做环境检查（校验 `git/cmake/gcc/java/mvn` 等工具可用性），随后进入与日志严格对应的 9 个阶段：
+
+1. 构建 `SeuLex`（`src/lexer_seulex`）  
+2. 构建 `yacc_parse_tool`（`src/parser_c99_yacc`）  
+3. 用 `SeuLex` 根据 `.l` 生成 `c99.yy.c`  
+4. 调用 `yacc_parse_tool emit`，仅导出：
+   - `y.tab.h`
+   - `token_cases.inc`
+5. 编译 `token_dumper`（由脚本生成 `token_dump_main.c`，与 `c99.yy.c` 链接）  
+6. 使用编译后的 `token_dumper` 对输入 C 调用 `Seulex`执行词法分析，生成 `runtime.tokens.rich / normalized.tokens.tsv`  
+7. 调用 `yacc_parse_tool run`，执行 LR/LALR 解析并导出 parser 产物（trace/reductions/log）  
+8. 使用 Maven 构建后端（`src/backend_intermediate_codegen`）  
+9. 运行后端，生成 `output.jimple`
+
+说明：
+
+- 默认优先使用 `test_input/c99.l` 与 `test_input/c99.y`；若不存在则回退到 `src/parser_c99_yacc/` 下同名文件。  
+- `--lex` / `--yacc` 参数优先级最高，会覆盖上述默认选择。
+
 ## 输出说明
 
 每次运行会生成独立目录：`output/<timestamp>_<case_name>/`
@@ -63,7 +84,6 @@
 - `tokens/runtime.tokens`：token 类型序列（纯文本）
 - `tokens/runtime.tokens.rich`：token + 词素 + 位置信息
 - `tokens/normalized.tokens.tsv`：标准化 token 表格
-- `tokens/normalized.tokens.json`：标准化 token JSON
 - `parser/yacc_parse.log`：语法分析日志
 - `backend/raw/parse_trace_lalr.tsv`：LALR 解析轨迹
 - `backend/raw/parse_reductions_lalr.txt`：规约记录

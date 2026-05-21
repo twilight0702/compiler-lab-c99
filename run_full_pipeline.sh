@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
+# 开启严格模式：
+# -e: 任一命令失败立即退出
+# -u: 使用未定义变量时报错
+# -o pipefail: 管道中任一命令失败则整体失败
 set -euo pipefail
 
+# 脚本根目录与核心路径定义
 ROOT_DIR=$(cd "$(dirname "$0")" && pwd)
 SRC_DIR="${ROOT_DIR}/src"
 OUT_ROOT="${ROOT_DIR}/output"
 
-# Clear, stable local names
+# 三个子仓库在本地的固定目录名（避免路径散落在脚本中）
 SEULEX_DIR="${SRC_DIR}/lexer_seulex"
 YACC_DIR="${SRC_DIR}/parser_c99_yacc"
 BACKEND_DIR="${SRC_DIR}/backend_intermediate_codegen"
 
+# 三个上游仓库地址
 SEULEX_REPO_URL="https://github.com/ZhangYin256/seulex.git"
 YACC_REPO_URL="https://github.com/twilight0702/c99-yacc-lr-lalr-practice.git"
 BACKEND_REPO_URL="https://github.com/LJR-12138/IntermediateCodeGeneration.git"
@@ -30,12 +36,22 @@ have_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
 
+# 统一命令执行方式：
+# 若系统存在 stdbuf，则强制行缓冲，避免长时间无输出给人“卡住”感
 line_buffer_run() {
   if have_cmd stdbuf; then
     stdbuf -oL -eL "$@"
   else
     "$@"
   fi
+}
+
+# 输出长分割行，强调阶段边界，便于在长日志中快速定位
+# 示例：
+# ==================== [阶段 1/9] 构建 SeuLex ====================
+stage_banner() {
+  local title="$1"
+  printf '\n%s\n' "==================== ${title} ===================="
 }
 
 require_cmd() {
@@ -47,7 +63,7 @@ require_cmd() {
 }
 
 check_basic_env() {
-  echo "[Env] Checking required tools..."
+  stage_banner "环境检查：校验必需工具"
   require_cmd git
   require_cmd cmake
   require_cmd gcc
@@ -60,7 +76,7 @@ check_basic_env() {
   require_cmd sed
   require_cmd find
 
-  echo "[Env] Tool versions:"
+  echo "[信息] 工具版本如下："
   echo "  - gcc:    $(gcc --version | head -n1)"
   echo "  - cmake:  $(cmake --version | head -n1)"
   echo "  - java:   $(java -version 2>&1 | head -n1)"
@@ -70,6 +86,8 @@ check_basic_env() {
 }
 
 clone_or_check_repo() {
+  # 参数说明：
+  # $1 本地目录、$2 远程仓库 URL、$3 展示名称、$4 是否自动 pull、$5 是否跳过远端检查
   local local_dir="$1"
   local repo_url="$2"
   local name="$3"
@@ -77,7 +95,7 @@ clone_or_check_repo() {
   local skip_repo_check="$5"
 
   if [[ ! -d "${local_dir}" ]]; then
-    echo "[Repo] Cloning ${name} -> ${local_dir}"
+    echo "[仓库] 克隆 ${name} -> ${local_dir}"
     git clone "${repo_url}" "${local_dir}"
     return
   fi
@@ -90,17 +108,17 @@ clone_or_check_repo() {
   local current_remote
   current_remote=$(git -C "${local_dir}" remote get-url origin 2>/dev/null || true)
   if [[ "${current_remote}" != "${repo_url}" ]]; then
-    echo "[WARN] ${name} origin mismatch"
-    echo "       expected: ${repo_url}"
-    echo "       actual:   ${current_remote}"
+    echo "[警告] ${name} 的 origin 地址与预期不一致"
+    echo "       期望: ${repo_url}"
+    echo "       实际: ${current_remote}"
   fi
 
   if [[ "${skip_repo_check}" == "1" ]]; then
-    echo "[Repo] Skipping remote update check for ${name} (--skip-repo-check)."
+    echo "[仓库] 跳过 ${name} 的远端更新检查（--skip-repo-check）"
     return
   fi
 
-  echo "[Repo] Checking updates for ${name}..."
+  echo "[仓库] 检查 ${name} 是否有远端更新..."
   if ! git -C "${local_dir}" fetch --quiet origin; then
     echo "[ERROR] fetch failed for ${name}; cannot verify remote commit status" >&2
     exit 1
@@ -131,37 +149,38 @@ clone_or_check_repo() {
   local local_head remote_head
   local_head=$(git -C "${local_dir}" log -1 --pretty='format:%h %cs %s')
   remote_head=$(git -C "${local_dir}" log -1 --pretty='format:%h %cs %s' "${upstream}")
-  echo "[Repo] ${name} local  HEAD: ${local_head}"
-  echo "[Repo] ${name} remote HEAD: ${remote_head} (${upstream})"
+  echo "[仓库] ${name} 本地  HEAD: ${local_head}"
+  echo "[仓库] ${name} 远端  HEAD: ${remote_head} (${upstream})"
 
   if [[ "${behind}" -gt 0 ]]; then
-    echo "[Repo] ${name} is behind ${upstream} by ${behind} commit(s)."
+    echo "[仓库] ${name} 落后于 ${upstream}，共 ${behind} 个提交"
     if [[ "${auto_pull}" == "1" ]]; then
       echo "[Repo] Auto-pull enabled, pulling latest with --ff-only..."
       git -C "${local_dir}" pull --ff-only
     elif [[ -t 0 ]]; then
-      read -r -p "       Pull latest now? [y/N]: " ans
+      read -r -p "       是否立即拉取最新提交？[y/N]: " ans
       ans=${ans:-N}
       if [[ "${ans}" =~ ^[Yy]$ ]]; then
         git -C "${local_dir}" pull --ff-only
       else
-        echo "[ERROR] ${name} is behind remote. Please pull latest and re-run." >&2
+        echo "[ERROR] ${name} 落后于远端，请先 pull 后重试。" >&2
         exit 1
       fi
     else
-      echo "[ERROR] ${name} is behind remote and no TTY for prompt. Re-run with --auto-pull or pull manually." >&2
+      echo "[ERROR] ${name} 落后于远端，且当前无 TTY 无法交互。请使用 --auto-pull 或手动 pull。" >&2
       exit 1
     fi
   else
-    echo "[Repo] ${name} is up-to-date on ${branch}."
+    echo "[仓库] ${name} 在分支 ${branch} 上已是最新"
   fi
 
   if [[ "${ahead}" -gt 0 ]]; then
-    echo "[Repo] ${name} has ${ahead} local commit(s) ahead of ${upstream}."
+    echo "[仓库] ${name} 相对 ${upstream} 本地超前 ${ahead} 个提交"
   fi
 }
 
 prepare_repos() {
+  # 创建 src 目录并准备三个依赖仓库
   local auto_pull="$1"
   local skip_repo_check="$2"
   mkdir -p "${SRC_DIR}"
@@ -171,6 +190,7 @@ prepare_repos() {
 }
 
 ensure_clean_cmake_build_dir() {
+  # 避免同一个 build 目录指向了“错误源码目录”导致 CMake 缓存污染
   local src_dir="$1"
   local build_dir="$2"
   local cache_file="${build_dir}/CMakeCache.txt"
@@ -185,6 +205,9 @@ ensure_clean_cmake_build_dir() {
 }
 
 run_pipeline() {
+  # 执行完整流水线：
+  # 1) 构建工具链 2) 生成词法器 3) 产出 token
+  # 4) 运行语法分析 5) 运行后端中间代码生成
   local input_c="$1"
   local lex_file_override="$2"
   local yacc_file_override="$3"
@@ -217,8 +240,16 @@ run_pipeline() {
 
   mkdir -p "${generated_dir}" "${tokens_dir}" "${parse_dir}" "${backend_raw_dir}" "${backend_classes}" "${seulex_build}" "${yacc_build}"
 
+  # 默认优先使用 test_input 下的词法/语法文件，便于本地调试；
+  # 若不存在则回退到 parser 子仓库内的默认文件。
   local lex_file="${YACC_DIR}/c99.l"
   local yacc_file="${YACC_DIR}/c99.y"
+  if [[ -f "${ROOT_DIR}/test_input/c99.l" ]]; then
+    lex_file="${ROOT_DIR}/test_input/c99.l"
+  fi
+  if [[ -f "${ROOT_DIR}/test_input/c99.y" ]]; then
+    yacc_file="${ROOT_DIR}/test_input/c99.y"
+  fi
   if [[ -n "${lex_file_override}" ]]; then
     lex_file="${lex_file_override}"
   fi
@@ -233,7 +264,6 @@ run_pipeline() {
     echo "[ERROR] Yacc file not found: ${yacc_file}" >&2
     exit 1
   fi
-
   local generated_yy_c="${generated_dir}/c99.yy.c"
   local generated_y_tab_h="${generated_dir}/y.tab.h"
   local token_cases_inc="${generated_dir}/token_cases.inc"
@@ -243,7 +273,6 @@ run_pipeline() {
   local lex_input_c="${tokens_dir}/input_no_preprocessor.c"
   local tokens_rich="${tokens_dir}/runtime.tokens.rich"
   local normalized_tsv="${tokens_dir}/normalized.tokens.tsv"
-  local normalized_json="${tokens_dir}/normalized.tokens.json"
 
   local parser_log="${parse_dir}/yacc_parse.log"
   local backend_log="${backend_dir}/intermediate_codegen.log"
@@ -254,25 +283,28 @@ run_pipeline() {
   local backend_legacy_tokens_backend="${backend_legacy_tokens_dir}/c99_backend.tokens"
   local backend_legacy_tokens_case="${backend_legacy_tokens_dir}/c99_${case_name}.tokens"
 
-  echo "[1/9] Build SeuLex"
+  stage_banner "阶段 1/9：构建 SeuLex"
   ensure_clean_cmake_build_dir "${SEULEX_DIR}" "${seulex_build}"
-  line_buffer_run cmake -S "${SEULEX_DIR}" -B "${seulex_build}" >/dev/null
+  line_buffer_run cmake -S "${SEULEX_DIR}" -B "${seulex_build}"
   line_buffer_run cmake --build "${seulex_build}" -j
 
-  echo "[2/9] Build yacc_parse_tool"
+  stage_banner "阶段 2/9：构建 yacc_parse_tool"
   ensure_clean_cmake_build_dir "${YACC_DIR}" "${yacc_build}"
-  line_buffer_run cmake -S "${YACC_DIR}" -B "${yacc_build}" >/dev/null
+  line_buffer_run cmake -S "${YACC_DIR}" -B "${yacc_build}"
   line_buffer_run cmake --build "${yacc_build}" -j
 
-  echo "[3/9] Generate scanner by SeuLex"
-  line_buffer_run "${seulex_build}/SeuLex" -o "${generated_yy_c}" "${lex_file}" >/dev/null
+  stage_banner "阶段 3/9：使用 SeuLex 生成 scanner"
+  line_buffer_run "${seulex_build}/SeuLex" -o "${generated_yy_c}" "${lex_file}"
+  # 让 yytext 从 static 变为全局可见，供 token_dump_main.c 引用
   sed -i 's/^static char yytext\[SEULEX_YYTEXT_MAX\];/char yytext[SEULEX_YYTEXT_MAX];/' "${generated_yy_c}"
 
-  echo "[4/9] Export parser headers from yacc_parse_tool"
-  line_buffer_run "${yacc_build}/src/yacc_parse_tool" "${yacc_file}" \
+  stage_banner "阶段 4/9：导出 parser 头文件与 token 映射"
+  line_buffer_run "${yacc_build}/src/yacc_parse_tool" emit "${yacc_file}" \
     --emit-y-tab-h "${generated_y_tab_h}" \
-    --emit-token-cases-inc "${token_cases_inc}" >/dev/null
+    --emit-token-cases-inc "${token_cases_inc}"
 
+  # 动态生成 token 导出程序：
+  # 读取词法输出，记录 token 名称、lexeme、行列，供后续 parser/backend 使用
   cat > "${token_dump_main_c}" <<'C_EOF'
 #include <ctype.h>
 #include <stdio.h>
@@ -387,48 +419,47 @@ int main(int argc, char **argv) {
 }
 C_EOF
 
-  echo "[5/9] Build token dumper"
+  stage_banner "阶段 5/9：构建 token 导出程序"
+  echo "[阶段5] 编译输入源码:"
+  echo "        - ${token_dump_main_c}"
+  echo "        - ${generated_yy_c}"
+  echo "[阶段5] 目标可执行文件: ${token_dumper_bin}"
   if ! line_buffer_run cc -std=gnu89 -w -DECHO='((void)0)' -I"${generated_dir}" \
     "${token_dump_main_c}" "${generated_yy_c}" -lfl -o "${token_dumper_bin}"; then
-    echo "[WARN] build with -lfl failed, retry without -lfl"
+    # 某些环境没有 libfl，自动降级重试
+    echo "[警告] 使用 -lfl 构建失败，尝试不链接 -lfl 重新构建"
     line_buffer_run cc -std=gnu89 -w -DECHO='((void)0)' -I"${generated_dir}" \
       "${token_dump_main_c}" "${generated_yy_c}" -o "${token_dumper_bin}"
   fi
+  echo "[阶段5] 编译完成: ${token_dumper_bin}"
 
-  echo "[6/9] Lex input C -> token files"
+  stage_banner "阶段 6/9：运行 Seulex 进行词法分析，生成 token 文件"
+  # 先去掉预处理指令行，减少对 lexer 的干扰
+  echo "[阶段6] 预处理输入文件（去除以 # 开头的预处理行）"
+  echo "        - 原始输入: ${abs_input}"
+  echo "        - 预处理后: ${lex_input_c}"
   awk '!/^[[:space:]]*#/' "${abs_input}" > "${lex_input_c}"
+  echo "[阶段6] 运行 token_dumper 生成 rich token"
   line_buffer_run "${token_dumper_bin}" "${lex_input_c}" "${tokens_rich}"
+  # 产出标准化 TSV，便于调试和人工查看
+  echo "[阶段6] 生成标准化 TSV: ${normalized_tsv}"
   awk 'BEGIN{OFS="\t"; print "index","type","lexeme","line","col"} {print NR-1,$1,$2,$3,$4}' \
     "${tokens_rich}" > "${normalized_tsv}"
+  echo "[阶段6] 产物统计:"
+  echo "        - rich token 行数: $(wc -l < "${tokens_rich}")"
+  echo "        - tsv token 行数:  $(($(wc -l < "${normalized_tsv}") - 1))"
 
-  {
-    echo "{"
-    echo "  \"format\": \"normalized.tokens.v1\"," 
-    echo "  \"source\": \"${abs_input}\"," 
-    echo "  \"tokens\": ["
-    awk 'BEGIN{first=1}
-      {
-        if (!first) print ",";
-        first=0;
-        printf "    {\"index\": %d, \"type\": \"%s\", \"lexeme\": \"%s\", \"line\": %d, \"col\": %d}",
-               NR-1, $1, $2, $3, $4;
-      }
-      END{print ""}' "${tokens_rich}"
-    echo "  ]"
-    echo "}"
-  } > "${normalized_json}"
-
-  echo "[7/9] Run yacc parser (LR/LALR)"
+  stage_banner "阶段 7/9：运行 yacc parser（LR/LALR）"
   mkdir -p "$(dirname "${parser_contract_tokens}")"
   cp -f "${tokens_rich}" "${parser_contract_tokens}"
-  # Backward compatibility for older IntermediateCodeGeneration path conventions.
+  # 兼容旧版 IntermediateCodeGeneration 的 token 路径约定
   mkdir -p "${backend_legacy_tokens_dir}"
   cp -f "${tokens_rich}" "${backend_legacy_tokens_backend}"
   cp -f "${tokens_rich}" "${backend_legacy_tokens_case}"
   mkdir -p "${parser_export_dir}"
 
   pushd "${ROOT_DIR}" >/dev/null
-  line_buffer_run "${yacc_build}/src/yacc_parse_tool" "${yacc_file}" \
+  line_buffer_run "${yacc_build}/src/yacc_parse_tool" run "${yacc_file}" \
     --parse-tokens "${tokens_rich}" \
     --export \
     --export-dir "${parser_export_dir}" \
@@ -442,13 +473,13 @@ C_EOF
   local backend_cp_file="${backend_dir}/backend.classpath"
   local backend_cp=""
 
-  echo "[8/9] Build backend with Maven (resolve deps: soot/opencsv/...)"
+  stage_banner "阶段 8/9：使用 Maven 构建后端并解析依赖"
   pushd "${BACKEND_DIR}" >/dev/null
-  line_buffer_run mvn -q -DskipTests compile dependency:build-classpath -Dmdep.outputFile="${backend_cp_file}"
+  line_buffer_run mvn -DskipTests compile dependency:build-classpath -Dmdep.outputFile="${backend_cp_file}"
   popd >/dev/null
   backend_cp="${BACKEND_DIR}/target/classes:$(cat "${backend_cp_file}")"
 
-  echo "[9/9] Generate intermediate code"
+  stage_banner "阶段 9/9：生成中间代码"
   line_buffer_run java -cp "${backend_cp}" com.compiler.backend.Main "${backend_raw_dir}/" \
     | tee "${backend_log}"
 
@@ -472,12 +503,16 @@ Key outputs:
 - Backend log:      backend/intermediate_codegen.log
 README_EOF
 
-  echo
-  echo "[Done] Pipeline finished"
-  echo "       Output root: ${run_dir}"
+  stage_banner "流水线完成"
+  echo "[完成] Pipeline 执行结束"
+  echo "       输出目录: ${run_dir}"
 }
 
 main() {
+  # 命令行参数解析：
+  # --auto-pull        仓库落后时自动 pull --ff-only
+  # --skip-repo-check  跳过远端更新检查
+  # --lex/--yacc       覆盖默认词法/语法文件
   if [[ $# -lt 1 ]]; then
     usage
     exit 1
