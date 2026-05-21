@@ -242,7 +242,6 @@ run_pipeline() {
 
   local lex_input_c="${tokens_dir}/input_no_preprocessor.c"
   local tokens_rich="${tokens_dir}/runtime.tokens.rich"
-  local tokens_plain="${tokens_dir}/runtime.tokens"
   local normalized_tsv="${tokens_dir}/normalized.tokens.tsv"
   local normalized_json="${tokens_dir}/normalized.tokens.json"
 
@@ -399,8 +398,6 @@ C_EOF
   echo "[6/9] Lex input C -> token files"
   awk '!/^[[:space:]]*#/' "${abs_input}" > "${lex_input_c}"
   line_buffer_run "${token_dumper_bin}" "${lex_input_c}" "${tokens_rich}"
-  awk '{print $1}' "${tokens_rich}" > "${tokens_plain}"
-
   awk 'BEGIN{OFS="\t"; print "index","type","lexeme","line","col"} {print NR-1,$1,$2,$3,$4}' \
     "${tokens_rich}" > "${normalized_tsv}"
 
@@ -466,7 +463,6 @@ Run Directory: ${run_dir}
 Input C File: ${abs_input}
 
 Key outputs:
-- Tokens (plain):   tokens/runtime.tokens
 - Tokens (rich):    tokens/runtime.tokens.rich
 - Tokens (norm):    tokens/normalized.tokens.tsv
 - Parse log:        parser/yacc_parse.log
