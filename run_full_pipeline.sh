@@ -432,7 +432,7 @@ C_EOF
 
   pushd "${ROOT_DIR}" >/dev/null
   line_buffer_run "${yacc_build}/src/yacc_parse_tool" "${yacc_file}" \
-    --parse-tokens "${tokens_plain}" \
+    --parse-tokens "${tokens_rich}" \
     --export \
     --export-dir "${parser_export_dir}" \
     | tee "${parser_log}"
