@@ -438,8 +438,22 @@ C_EOF
     "${token_dump_main_c}" "${generated_yy_c}" -lfl -o "${token_dumper_bin}"; then
     # 某些环境没有 libfl，自动降级重试
     echo "[警告] 使用 -lfl 构建失败，尝试不链接 -lfl 重新构建"
-    line_buffer_run cc -std=gnu89 -w -DECHO='((void)0)' -I"${generated_dir}" \
-      "${token_dump_main_c}" "${generated_yy_c}" -o "${token_dumper_bin}"
+    if ! line_buffer_run cc -std=gnu89 -w -DECHO='((void)0)' -I"${generated_dir}" \
+      "${token_dump_main_c}" "${generated_yy_c}" -o "${token_dumper_bin}"; then
+      # 某些 scanner（如 simple_test/cal.l）未定义 yylineno/column/yylval，
+      # 尝试添加兼容性符号定义
+      echo "[警告] 仍链接失败，尝试添加兼容性符号定义"
+      local compat_c="${generated_dir}/token_dumper_compat.c"
+      cat > "${compat_c}" <<'COMPAT_EOF'
+/* Compatibility definitions for scanners that don't provide these symbols
+   (e.g. simple calculator lex files without yylineno/column tracking). */
+int yylval = 0;
+int yylineno = 1;
+int column = 1;
+COMPAT_EOF
+      line_buffer_run cc -std=gnu89 -w -DECHO='((void)0)' -I"${generated_dir}" \
+        "${token_dump_main_c}" "${generated_yy_c}" "${compat_c}" -o "${token_dumper_bin}"
+    fi
   fi
   echo "[阶段5] 编译完成: ${token_dumper_bin}"
 
