@@ -23,11 +23,12 @@ BACKEND_REPO_URL="https://github.com/LJR-12138/IntermediateCodeGeneration.git"
 usage() {
   cat <<USAGE
 Usage:
-  $0 [--auto-pull] [--skip-repo-check] [--frontend-only] [--lex <path/to/file.l>] [--yacc <path/to/file.y>] <input.c>
+  $0 [--auto-pull] [--skip-repo-check] [--frontend-only] [--lex <path/to/file.l>] [--yacc <path/to/file.y>] [<input.c>]
 
 Example:
   $0 sample_complex_input.c
   $0 --frontend-only sample_complex_input.c
+  $0 --frontend-only
   $0 --auto-pull --lex src/parser_c99_yacc/c99.l --yacc src/parser_c99_yacc/c99.y sample_complex_input.c
   $0 --skip-repo-check sample_complex_input.c
 USAGE
@@ -217,21 +218,24 @@ run_pipeline() {
   # 执行完整流水线：
   # 1) 构建工具链 2) 生成词法器 3) 产出 token
   # 4) 运行语法分析 5) 运行后端中间代码生成
-  local input_c="$1"
+  local input_c="${1:-}"
   local lex_file_override="$2"
   local yacc_file_override="$3"
   local frontend_only="$4"
 
-  if [[ ! -f "${input_c}" ]]; then
-    echo "[ERROR] Input C file not found: ${input_c}" >&2
-    exit 1
+  local has_input_c="0"
+  local abs_input=""
+  local case_name="frontend_only"
+  if [[ -n "${input_c}" ]]; then
+    if [[ ! -f "${input_c}" ]]; then
+      echo "[ERROR] Input C file not found: ${input_c}" >&2
+      exit 1
+    fi
+    has_input_c="1"
+    abs_input=$(cd "$(dirname "${input_c}")" && pwd)/"$(basename "${input_c}")"
+    case_name=$(basename "${input_c}")
+    case_name="${case_name%.*}"
   fi
-
-  local abs_input
-  abs_input=$(cd "$(dirname "${input_c}")" && pwd)/"$(basename "${input_c}")"
-  local case_name
-  case_name=$(basename "${input_c}")
-  case_name="${case_name%.*}"
 
   local ts
   ts=$(date +"%Y%m%d_%H%M%S")
@@ -457,42 +461,46 @@ COMPAT_EOF
   fi
   echo "[阶段5] 编译完成: ${token_dumper_bin}"
 
-  stage_banner "阶段 6/9：运行 Seulex 进行词法分析，生成 token 文件"
-  # 先去掉预处理指令行，减少对 lexer 的干扰
-  echo "[阶段6] 预处理输入文件（去除以 # 开头的预处理行）"
-  echo "        - 原始输入: ${abs_input}"
-  echo "        - 预处理后: ${lex_input_c}"
-  awk '!/^[[:space:]]*#/' "${abs_input}" > "${lex_input_c}"
-  echo "[阶段6] 运行 token_dumper 生成 rich token"
-  line_buffer_run "${token_dumper_bin}" "${lex_input_c}" "${tokens_rich}"
-  # 产出标准化 TSV，便于调试和人工查看
-  echo "[阶段6] 生成标准化 TSV: ${normalized_tsv}"
-  awk 'BEGIN{OFS="\t"; print "index","type","lexeme","line","col"} {print NR-1,$1,$2,$3,$4}' \
-    "${tokens_rich}" > "${normalized_tsv}"
-  echo "[阶段6] 产物统计:"
-  echo "        - rich token 行数: $(wc -l < "${tokens_rich}")"
-  echo "        - tsv token 行数:  $(($(wc -l < "${normalized_tsv}") - 1))"
+  if [[ "${has_input_c}" == "1" ]]; then
+    stage_banner "阶段 6/9：运行 Seulex 进行词法分析，生成 token 文件"
+    # 先去掉预处理指令行，减少对 lexer 的干扰
+    echo "[阶段6] 预处理输入文件（去除以 # 开头的预处理行）"
+    echo "        - 原始输入: ${abs_input}"
+    echo "        - 预处理后: ${lex_input_c}"
+    awk '!/^[[:space:]]*#/' "${abs_input}" > "${lex_input_c}"
+    echo "[阶段6] 运行 token_dumper 生成 rich token"
+    line_buffer_run "${token_dumper_bin}" "${lex_input_c}" "${tokens_rich}"
+    # 产出标准化 TSV，便于调试和人工查看
+    echo "[阶段6] 生成标准化 TSV: ${normalized_tsv}"
+    awk 'BEGIN{OFS="\t"; print "index","type","lexeme","line","col"} {print NR-1,$1,$2,$3,$4}' \
+      "${tokens_rich}" > "${normalized_tsv}"
+    echo "[阶段6] 产物统计:"
+    echo "        - rich token 行数: $(wc -l < "${tokens_rich}")"
+    echo "        - tsv token 行数:  $(($(wc -l < "${normalized_tsv}") - 1))"
 
-  stage_banner "阶段 7/9：运行 yacc parser（LR/LALR）"
-  mkdir -p "$(dirname "${parser_contract_tokens}")"
-  cp -f "${tokens_rich}" "${parser_contract_tokens}"
-  # 兼容旧版 IntermediateCodeGeneration 的 token 路径约定
-  mkdir -p "${backend_legacy_tokens_dir}"
-  cp -f "${tokens_rich}" "${backend_legacy_tokens_backend}"
-  cp -f "${tokens_rich}" "${backend_legacy_tokens_case}"
-  mkdir -p "${parser_export_dir}"
+    stage_banner "阶段 7/9：运行 yacc parser（LR/LALR）"
+    mkdir -p "$(dirname "${parser_contract_tokens}")"
+    cp -f "${tokens_rich}" "${parser_contract_tokens}"
+    # 兼容旧版 IntermediateCodeGeneration 的 token 路径约定
+    mkdir -p "${backend_legacy_tokens_dir}"
+    cp -f "${tokens_rich}" "${backend_legacy_tokens_backend}"
+    cp -f "${tokens_rich}" "${backend_legacy_tokens_case}"
+    mkdir -p "${parser_export_dir}"
 
-  pushd "${ROOT_DIR}" >/dev/null
-  line_buffer_run "${yacc_build}/src/yacc_parse_tool" run "${yacc_file}" \
-    --parse-tokens "${tokens_rich}" \
-    --export \
-    --export-dir "${parser_export_dir}" \
-    | tee "${parser_log}"
-  popd >/dev/null
+    pushd "${ROOT_DIR}" >/dev/null
+    line_buffer_run "${yacc_build}/src/yacc_parse_tool" run "${yacc_file}" \
+      --parse-tokens "${tokens_rich}" \
+      --export \
+      --export-dir "${parser_export_dir}" \
+      | tee "${parser_log}"
+    popd >/dev/null
 
-  cp -f "${parser_export_dir}/raw/parse_trace_lalr.tsv" "${backend_raw_dir}/parse_trace_lalr.tsv"
-  cp -f "${parser_export_dir}/raw/parse_reductions_lalr.txt" "${backend_raw_dir}/parse_reductions_lalr.txt"
-  cp -f "${normalized_tsv}" "${backend_dir}/normalized.tokens.tsv"
+    cp -f "${parser_export_dir}/raw/parse_trace_lalr.tsv" "${backend_raw_dir}/parse_trace_lalr.tsv"
+    cp -f "${parser_export_dir}/raw/parse_reductions_lalr.txt" "${backend_raw_dir}/parse_reductions_lalr.txt"
+    cp -f "${normalized_tsv}" "${backend_dir}/normalized.tokens.tsv"
+  else
+    echo "[信息] 未提供 input.c：跳过阶段 6/9 和 7/9（token 生成与 parser 运行）"
+  fi
 
   local backend_cp_file="${backend_dir}/backend.classpath"
   local backend_cp=""
@@ -519,14 +527,14 @@ COMPAT_EOF
 
   cat > "${run_dir}/README.txt" <<README_EOF
 Run Directory: ${run_dir}
-Input C File: ${abs_input}
+Input C File: ${abs_input:-<not provided>}
 
 Key outputs:
-- Tokens (rich):    tokens/runtime.tokens.rich
-- Tokens (norm):    tokens/normalized.tokens.tsv
-- Parse log:        parser/yacc_parse.log
-- Parse traces:     backend/raw/parse_trace_lalr.tsv
-- Parse reductions: backend/raw/parse_reductions_lalr.txt
+- Tokens (rich):    tokens/runtime.tokens.rich (仅提供 input.c 时生成)
+- Tokens (norm):    tokens/normalized.tokens.tsv (仅提供 input.c 时生成)
+- Parse log:        parser/yacc_parse.log (仅提供 input.c 时生成)
+- Parse traces:     backend/raw/parse_trace_lalr.tsv (仅提供 input.c 时生成)
+- Parse reductions: backend/raw/parse_reductions_lalr.txt (仅提供 input.c 时生成)
 README_EOF
 
   if [[ "${frontend_only}" != "1" ]]; then
@@ -606,7 +614,7 @@ main() {
     shift
   done
 
-  if [[ -z "${input_c}" ]]; then
+  if [[ -z "${input_c}" && "${frontend_only}" != "1" ]]; then
     echo "[ERROR] Missing input C file" >&2
     usage
     exit 1
