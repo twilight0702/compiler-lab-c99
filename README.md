@@ -52,11 +52,14 @@
 
 ```bash
 ./run_full_pipeline.sh --frontend-only test_input/sample_pipeline_valid.c
+# 仅验证前端生成/编译链路（不提供输入 C）
+./run_full_pipeline.sh --frontend-only
 ```
 
 说明：
 
-- 会执行前端阶段并正常输出 token 与 parser 产物
+- 传入 `input.c` 时：会执行前端阶段并输出 token 与 parser 产物
+- 未传入 `input.c` 时：执行阶段 1-5，跳过阶段 6-7（不生成 token/parser 运行产物）
 - 会跳过后端阶段（Maven 构建与 `output.jimple` 生成）
 - 环境检查中不再要求 `java/javac/mvn`
 - 仓库准备阶段不再检查/克隆 `IntermediateCodeGeneration`
@@ -85,12 +88,16 @@
 8. 使用 Maven 构建后端（`src/backend_intermediate_codegen`）  
 9. 运行后端，生成 `output.jimple`
 
-若启用 `--frontend-only`，会执行阶段 1-7，并跳过阶段 8-9。
+若启用 `--frontend-only`：
+
+- 提供 `input.c`：执行阶段 1-7，并跳过阶段 8-9。
+- 不提供 `input.c`：执行阶段 1-5，并跳过阶段 6-9。
 
 说明：
 
 - 默认优先使用 `test_input/c99.l` 与 `test_input/c99.y`；若不存在则回退到 `src/parser_c99_yacc/` 下同名文件。  
 - `--lex` / `--yacc` 参数优先级最高，会覆盖上述默认选择。
+- 在 `--frontend-only` 且未提供 `input.c` 时，仍可用于仅验证 `.l/.y` 变更后的生成链路是否可用。
 
 ## 输出说明
 
