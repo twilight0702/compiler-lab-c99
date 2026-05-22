@@ -23,10 +23,11 @@ BACKEND_REPO_URL="https://github.com/LJR-12138/IntermediateCodeGeneration.git"
 usage() {
   cat <<USAGE
 Usage:
-  $0 [--auto-pull] [--skip-repo-check] [--lex <path/to/file.l>] [--yacc <path/to/file.y>] <input.c>
+  $0 [--auto-pull] [--skip-repo-check] [--frontend-only] [--lex <path/to/file.l>] [--yacc <path/to/file.y>] <input.c>
 
 Example:
   $0 sample_complex_input.c
+  $0 --frontend-only sample_complex_input.c
   $0 --auto-pull --lex src/parser_c99_yacc/c99.l --yacc src/parser_c99_yacc/c99.y sample_complex_input.c
   $0 --skip-repo-check sample_complex_input.c
 USAGE
@@ -63,25 +64,30 @@ require_cmd() {
 }
 
 check_basic_env() {
+  local frontend_only="$1"
   stage_banner "环境检查：校验必需工具"
   require_cmd git
   require_cmd cmake
   require_cmd gcc
   require_cmd g++
   require_cmd cc
-  require_cmd java
-  require_cmd javac
-  require_cmd mvn
   require_cmd awk
   require_cmd sed
   require_cmd find
+  if [[ "${frontend_only}" != "1" ]]; then
+    require_cmd java
+    require_cmd javac
+    require_cmd mvn
+  fi
 
   echo "[信息] 工具版本如下："
   echo "  - gcc:    $(gcc --version | head -n1)"
   echo "  - cmake:  $(cmake --version | head -n1)"
-  echo "  - java:   $(java -version 2>&1 | head -n1)"
-  echo "  - javac:  $(javac -version 2>&1 | head -n1)"
-  echo "  - maven:  $(mvn -version 2>&1 | head -n1)"
+  if [[ "${frontend_only}" != "1" ]]; then
+    echo "  - java:   $(java -version 2>&1 | head -n1)"
+    echo "  - javac:  $(javac -version 2>&1 | head -n1)"
+    echo "  - maven:  $(mvn -version 2>&1 | head -n1)"
+  fi
 
 }
 
@@ -183,10 +189,13 @@ prepare_repos() {
   # 创建 src 目录并准备三个依赖仓库
   local auto_pull="$1"
   local skip_repo_check="$2"
+  local frontend_only="$3"
   mkdir -p "${SRC_DIR}"
   clone_or_check_repo "${SEULEX_DIR}" "${SEULEX_REPO_URL}" "seulex" "${auto_pull}" "${skip_repo_check}"
   clone_or_check_repo "${YACC_DIR}" "${YACC_REPO_URL}" "c99-yacc-lr-lalr-practice" "${auto_pull}" "${skip_repo_check}"
-  clone_or_check_repo "${BACKEND_DIR}" "${BACKEND_REPO_URL}" "IntermediateCodeGeneration" "${auto_pull}" "${skip_repo_check}"
+  if [[ "${frontend_only}" != "1" ]]; then
+    clone_or_check_repo "${BACKEND_DIR}" "${BACKEND_REPO_URL}" "IntermediateCodeGeneration" "${auto_pull}" "${skip_repo_check}"
+  fi
 }
 
 ensure_clean_cmake_build_dir() {
@@ -211,6 +220,7 @@ run_pipeline() {
   local input_c="$1"
   local lex_file_override="$2"
   local yacc_file_override="$3"
+  local frontend_only="$4"
 
   if [[ ! -f "${input_c}" ]]; then
     echo "[ERROR] Input C file not found: ${input_c}" >&2
@@ -473,20 +483,24 @@ C_EOF
   local backend_cp_file="${backend_dir}/backend.classpath"
   local backend_cp=""
 
-  stage_banner "阶段 8/9：使用 Maven 构建后端并解析依赖"
-  pushd "${BACKEND_DIR}" >/dev/null
-  line_buffer_run mvn -DskipTests compile dependency:build-classpath -Dmdep.outputFile="${backend_cp_file}"
-  popd >/dev/null
-  backend_cp="${BACKEND_DIR}/target/classes:$(cat "${backend_cp_file}")"
+  if [[ "${frontend_only}" != "1" ]]; then
+    stage_banner "阶段 8/9：使用 Maven 构建后端并解析依赖"
+    pushd "${BACKEND_DIR}" >/dev/null
+    line_buffer_run mvn -DskipTests compile dependency:build-classpath -Dmdep.outputFile="${backend_cp_file}"
+    popd >/dev/null
+    backend_cp="${BACKEND_DIR}/target/classes:$(cat "${backend_cp_file}")"
 
-  stage_banner "阶段 9/9：生成中间代码"
-  line_buffer_run java -cp "${backend_cp}" com.compiler.backend.Main "${backend_raw_dir}/" \
-    | tee "${backend_log}"
+    stage_banner "阶段 9/9：生成中间代码"
+    line_buffer_run java -cp "${backend_cp}" com.compiler.backend.Main "${backend_raw_dir}/" \
+      | tee "${backend_log}"
 
-  if [[ -f "${backend_dir}/output.jimple" ]]; then
-    :
-  elif [[ -f "${backend_raw_dir%/raw}/output.jimple" ]]; then
-    cp -f "${backend_raw_dir%/raw}/output.jimple" "${backend_dir}/output.jimple"
+    if [[ -f "${backend_dir}/output.jimple" ]]; then
+      :
+    elif [[ -f "${backend_raw_dir%/raw}/output.jimple" ]]; then
+      cp -f "${backend_raw_dir%/raw}/output.jimple" "${backend_dir}/output.jimple"
+    fi
+  else
+    echo "[信息] 已启用 --frontend-only：跳过阶段 8/9（后端构建与中间代码生成）"
   fi
 
   cat > "${run_dir}/README.txt" <<README_EOF
@@ -499,9 +513,14 @@ Key outputs:
 - Parse log:        parser/yacc_parse.log
 - Parse traces:     backend/raw/parse_trace_lalr.tsv
 - Parse reductions: backend/raw/parse_reductions_lalr.txt
+README_EOF
+
+  if [[ "${frontend_only}" != "1" ]]; then
+    cat >> "${run_dir}/README.txt" <<README_EOF
 - Jimple output:    backend/output.jimple
 - Backend log:      backend/intermediate_codegen.log
 README_EOF
+  fi
 
   stage_banner "流水线完成"
   echo "[完成] Pipeline 执行结束"
@@ -523,6 +542,7 @@ main() {
   local yacc_file_override=""
   local auto_pull="0"
   local skip_repo_check="0"
+  local frontend_only="0"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -531,6 +551,9 @@ main() {
         ;;
       --skip-repo-check)
         skip_repo_check="1"
+        ;;
+      --frontend-only)
+        frontend_only="1"
         ;;
       --lex)
         shift
@@ -575,9 +598,9 @@ main() {
     exit 1
   fi
 
-  check_basic_env
-  prepare_repos "${auto_pull}" "${skip_repo_check}"
-  run_pipeline "${input_c}" "${lex_file_override}" "${yacc_file_override}"
+  check_basic_env "${frontend_only}"
+  prepare_repos "${auto_pull}" "${skip_repo_check}" "${frontend_only}"
+  run_pipeline "${input_c}" "${lex_file_override}" "${yacc_file_override}" "${frontend_only}"
 }
 
 main "$@"

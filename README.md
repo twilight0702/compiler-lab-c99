@@ -8,6 +8,7 @@
 ## 功能概览
 
 - 一键执行完整流水线：`lex -> yacc parse -> intermediate codegen`
+- 支持仅运行前端：`lex -> yacc parse`（`--frontend-only`）
 - 自动准备/校验依赖仓库（seulex、c99-yacc-lr-lalr-practice、IntermediateCodeGeneration）
 - 支持跳过仓库远端新提交检查：`--skip-repo-check`
 - 输出结构化产物：token、解析日志、解析轨迹、Jimple 中间代码
@@ -15,17 +16,18 @@
 
 ## 环境依赖
 
-脚本会在启动时检查以下工具：
+脚本会在启动时检查以下工具（完整模式）：
 
 - `git`
 - `cmake`
 - `gcc` / `g++` / `cc`
 - `java` / `javac`
 - `awk` / `sed` / `find`
-- `mvn`（可选，缺失时回退为 `javac + 本地 jar`）
+- `mvn`
 
 说明：
 
+- 若使用 `--frontend-only`，则不要求 `java` / `javac` / `mvn`。
 - 主 pipeline 不再依赖 `bison`。
 - 若需要执行 `src/parser_c99_yacc` 子仓库中的 bison 对拍测试（tests 2/2f），再单独安装 `bison`。
 
@@ -46,7 +48,20 @@
   test_input/sample_pipeline_valid.c
 ```
 
-### 3. 跳过仓库远端提交检查
+### 3. 仅运行前端（lex+yacc，不运行后端）
+
+```bash
+./run_full_pipeline.sh --frontend-only test_input/sample_pipeline_valid.c
+```
+
+说明：
+
+- 会执行前端阶段并正常输出 token 与 parser 产物
+- 会跳过后端阶段（Maven 构建与 `output.jimple` 生成）
+- 环境检查中不再要求 `java/javac/mvn`
+- 仓库准备阶段不再检查/克隆 `IntermediateCodeGeneration`
+
+### 4. 跳过仓库远端提交检查
 
 适用于离线环境、网络受限，或你明确只想使用当前本地子仓库代码时：
 
@@ -56,7 +71,7 @@
 
 ## 脚本流程（run_full_pipeline.sh）
 
-脚本会先做环境检查（校验 `git/cmake/gcc/java/mvn` 等工具可用性），随后进入与日志严格对应的 9 个阶段：
+脚本会先做环境检查（完整模式下会校验 `git/cmake/gcc/java/mvn` 等工具可用性），随后进入与日志严格对应的 9 个阶段：
 
 1. 构建 `SeuLex`（`src/lexer_seulex`）  
 2. 构建 `yacc_parse_tool`（`src/parser_c99_yacc`）  
@@ -70,6 +85,8 @@
 8. 使用 Maven 构建后端（`src/backend_intermediate_codegen`）  
 9. 运行后端，生成 `output.jimple`
 
+若启用 `--frontend-only`，会执行阶段 1-7，并跳过阶段 8-9。
+
 说明：
 
 - 默认优先使用 `test_input/c99.l` 与 `test_input/c99.y`；若不存在则回退到 `src/parser_c99_yacc/` 下同名文件。  
@@ -81,7 +98,6 @@
 
 核心产物包括：
 
-- `tokens/runtime.tokens`：token 类型序列（纯文本）
 - `tokens/runtime.tokens.rich`：token + 词素 + 位置信息
 - `tokens/normalized.tokens.tsv`：标准化 token 表格
 - `parser/yacc_parse.log`：语法分析日志
@@ -89,6 +105,8 @@
 - `backend/raw/parse_reductions_lalr.txt`：规约记录
 - `backend/output.jimple`：后端输出的中间代码
 - `backend/intermediate_codegen.log`：后端执行日志
+
+启用 `--frontend-only` 时，不会生成 `backend/output.jimple` 与 `backend/intermediate_codegen.log`。
 
 ## 目录结构
 
@@ -109,7 +127,7 @@
 ## 常见问题
 
 - `mvn: command not found`  
-  脚本会尝试 `javac` 回退；若后端仓库缺少依赖 jar，请安装 Maven。
+  请安装 Maven 后重试。
 
 - `Missing required command`  
   根据报错安装缺失工具后重试。
