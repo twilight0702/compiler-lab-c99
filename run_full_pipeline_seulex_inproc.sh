@@ -50,8 +50,8 @@ if [[ $# -lt 1 ]]; then
 fi
 
 INPUT_C=""
-LEX_FILE="${ROOT_DIR}/src/lexer_seulex/extracted_testcases/full_pipeline_case/test/c99.l"
-YACC_FILE="${ROOT_DIR}/src/parser_c99_yacc/c99.y"
+LEX_FILE="${ROOT_DIR}/test_input/c99.l"
+YACC_FILE="${ROOT_DIR}/test_input/c99.y"
 FRONTEND_ONLY=0
 
 while [[ $# -gt 0 ]]; do
