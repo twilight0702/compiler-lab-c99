@@ -57,7 +57,7 @@ void count(void);   /* 计算词法元素所占用的列，在规则部分被使
 "volatile"		{ count(); return(VOLATILE); }
 "while"			{ count(); return(WHILE); }
 
-{L}({L}|{D})*		{ count(); return(check_type()); }                   /* identifier, 也可能是保留字*/
+[A-Za-z_][A-Za-z0-9_]*	{ count(); return(check_type()); }                   /* identifier, 也可能是保留字*/
 
 0[xX]{H}+{IS}?		{ count(); return(CONSTANT); }             /* 16进制数 */
 0[0-7]*{IS}?		{ count(); return(CONSTANT); }             /* 8进制数 */

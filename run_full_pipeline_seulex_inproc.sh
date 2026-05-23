@@ -217,9 +217,147 @@ NEED_COLUMN_COMPAT=0
   echo "[ok] cache saved: ${CACHE_DIR}"
 fi
 
-banner "5/9 run frontend (lexer+parser)"
+banner "5/9 dump full tokens (lexer-only)"
+TOKEN_DUMP_MAIN_C="${BUILD_DIR}/token_dump_main.c"
+TOKEN_DUMPER_BIN="${BUILD_DIR}/token_dumper"
+cat > "${TOKEN_DUMP_MAIN_C}" <<'C_EOF'
+#include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#include "y.tab.h"
+
+int yylex(void);
+extern char yytext[];
+extern int yyleng;
+extern int yylineno;
+extern int column;
+
+void error(const char *s) {
+  if (s) {
+    fprintf(stderr, "lexer error: %s\n", s);
+  }
+}
+
+static const char *token_name(int tok) {
+  switch (tok) {
+#include "token_cases.inc"
+    default:
+      return NULL;
+  }
+}
+
+static void printable_char_token(int tok, char buf[16]) {
+  unsigned char ch = (unsigned char)tok;
+  if (ch == '\\' || ch == '\'') {
+    snprintf(buf, 16, "'%c%c'", '\\', ch);
+  } else if (isprint(ch)) {
+    snprintf(buf, 16, "'%c'", ch);
+  } else {
+    snprintf(buf, 16, "'\\x%02X'", ch);
+  }
+}
+
+static void write_escaped_lexeme(FILE *out, const char *src) {
+  const unsigned char *p = (const unsigned char *)src;
+  while (*p) {
+    unsigned char ch = *p++;
+    if (ch == '\\') {
+      fputs("\\\\", out);
+    } else if (ch == '"') {
+      fputs("\\\"", out);
+    } else if (ch == '\n') {
+      fputs("\\n", out);
+    } else if (ch == '\t') {
+      fputs("\\t", out);
+    } else if (ch == '\r') {
+      fputs("\\r", out);
+    } else if (ch == ' ') {
+      fputs("\\s", out);
+    } else {
+      fputc((int)ch, out);
+    }
+  }
+}
+
+int main(int argc, char **argv) {
+  if (argc != 3) {
+    fprintf(stderr, "Usage: %s <input.c> <out.tokens>\n", argv[0]);
+    return 1;
+  }
+
+  if (!freopen(argv[1], "rb", stdin)) {
+    perror("freopen stdin");
+    return 1;
+  }
+
+  FILE *out = fopen(argv[2], "wb");
+  if (!out) {
+    perror("open out.tokens");
+    return 1;
+  }
+
+  int tok;
+  while ((tok = yylex()) != 0) {
+    const char *name = token_name(tok);
+    char char_name_buf[16];
+    int tok_col;
+    if (!name) {
+      if (tok >= 0 && tok < 256) {
+        printable_char_token(tok, char_name_buf);
+        name = char_name_buf;
+      } else {
+        fprintf(stderr, "Unknown token id: %d\n", tok);
+        fclose(out);
+        return 2;
+      }
+    }
+
+    tok_col = column - yyleng + 1;
+    if (tok_col < 1) {
+      tok_col = 1;
+    }
+    fprintf(out, "%s ", name);
+    write_escaped_lexeme(out, yytext);
+    fprintf(out, " %d %d\n", yylineno, tok_col);
+  }
+
+  fclose(out);
+  return 0;
+}
+C_EOF
+
+TOKEN_DUMP_COMPAT_OBJ=""
+if ! rg -n "^[[:space:]]*int[[:space:]]+yylineno[[:space:]]*=" "${LEX_FILE}" >/dev/null 2>&1 || \
+   ! rg -n "^[[:space:]]*int[[:space:]]+column[[:space:]]*=" "${LEX_FILE}" >/dev/null 2>&1 || \
+   ! rg -n "^[[:space:]]*YYSTYPE[[:space:]]+yylval[[:space:]]*(=|;)" "${LEX_FILE}" >/dev/null 2>&1; then
+  TOKEN_DUMP_COMPAT_SRC="${BUILD_DIR}/token_dump_compat.c"
+  TOKEN_DUMP_COMPAT_OBJ="${BUILD_DIR}/token_dump_compat.o"
+  : > "${TOKEN_DUMP_COMPAT_SRC}"
+  echo "#include \"y.tab.h\"" >> "${TOKEN_DUMP_COMPAT_SRC}"
+  if ! rg -n "^[[:space:]]*int[[:space:]]+yylineno[[:space:]]*=" "${LEX_FILE}" >/dev/null 2>&1; then
+    echo "int yylineno = 1;" >> "${TOKEN_DUMP_COMPAT_SRC}"
+  fi
+  if ! rg -n "^[[:space:]]*int[[:space:]]+column[[:space:]]*=" "${LEX_FILE}" >/dev/null 2>&1; then
+    echo "int column = 1;" >> "${TOKEN_DUMP_COMPAT_SRC}"
+  fi
+  if ! rg -n "^[[:space:]]*YYSTYPE[[:space:]]+yylval[[:space:]]*(=|;)" "${LEX_FILE}" >/dev/null 2>&1; then
+    echo "YYSTYPE yylval;" >> "${TOKEN_DUMP_COMPAT_SRC}"
+  fi
+  gcc -std=c11 -w -c "${TOKEN_DUMP_COMPAT_SRC}" -o "${TOKEN_DUMP_COMPAT_OBJ}"
+fi
+
+cc -std=gnu89 -w -I"${BUILD_DIR}" \
+  "${TOKEN_DUMP_MAIN_C}" \
+  "${OUT_DIR}/lex.yy.c" \
+  ${TOKEN_DUMP_COMPAT_OBJ:+${TOKEN_DUMP_COMPAT_OBJ}} \
+  -lfl -o "${TOKEN_DUMPER_BIN}"
+"${TOKEN_DUMPER_BIN}" "${BUILD_DIR}/input.normalized.c" "${REPORT_DIR}/runtime.tokens.rich"
+echo "[ok] generated(full token stream): ${REPORT_DIR}/runtime.tokens.rich"
+
+banner "6/9 run frontend (lexer+parser)"
 set +e
-"${BUILD_DIR}/frontend" "${BUILD_DIR}/input.normalized.c" "${REPORT_DIR}/runtime.tokens.rich" | tee "${LOG_DIR}/frontend.log"
+"${BUILD_DIR}/frontend" "${BUILD_DIR}/input.normalized.c" "${REPORT_DIR}/runtime.tokens.consumed.rich" | tee "${LOG_DIR}/frontend.log"
 FRONTEND_RC=${PIPESTATUS[0]}
 set -e
 echo "[ok] log: ${LOG_DIR}/frontend.log"
@@ -228,7 +366,7 @@ if [[ ${FRONTEND_RC} -ne 0 ]]; then
   echo "[warn] frontend reported non-zero exit (${FRONTEND_RC})"
 fi
 
-echo "[ok] generated: ${REPORT_DIR}/runtime.tokens.rich"
+echo "[ok] generated(consumed token stream): ${REPORT_DIR}/runtime.tokens.consumed.rich"
 RUN_NAME=$(basename "${OUT_DIR}")
 LEGACY_TOKENS_DIR="${ROOT_DIR}/c99-yacc-lr-lalr-practice/contracts/yacc/tokens"
 mkdir -p "${LEGACY_TOKENS_DIR}"
@@ -241,10 +379,11 @@ cp -f "${REPORT_DIR}/runtime.tokens.rich" "${BACKEND_REL_TOKENS_DIR}/c99_output.
 cp -f "${REPORT_DIR}/runtime.tokens.rich" "${BACKEND_REL_TOKENS_DIR}/c99_${RUN_NAME}.tokens"
 echo "[ok] synced backend-relative token: ${BACKEND_REL_TOKENS_DIR}/c99_output.tokens"
 
-banner "6/9 export parser traces"
+banner "7/9 export parser traces"
 VIS_CASE_ID="c99_${RUN_NAME}"
 VIS_ARTIFACTS_ROOT="${REPORT_DIR}/artifacts/yacc"
 VIS_DATA_ROOT="${YACC_DIR}/visualizer/public/data/v1"
+VIS_LATEST_FILE="${VIS_DATA_ROOT}/latest.json"
 if [[ -x "${VIS_PIPELINE_TOOL}" ]]; then
   "${VIS_PIPELINE_TOOL}" \
     --yacc-tool "${YACC_TOOL}" \
@@ -253,6 +392,13 @@ if [[ -x "${VIS_PIPELINE_TOOL}" ]]; then
     --case "${VIS_CASE_ID}" \
     --artifacts-root "${VIS_ARTIFACTS_ROOT}" \
     --visualizer-data-root "${VIS_DATA_ROOT}"
+  cat > "${VIS_LATEST_FILE}" <<EOF
+{
+  "case_id": "${VIS_CASE_ID}",
+  "updated_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+  echo "[ok] visualizer latest pointer: ${VIS_LATEST_FILE} -> ${VIS_CASE_ID}"
 else
   echo "[warn] visualizer pipeline tool not found: ${VIS_PIPELINE_TOOL}"
 fi
@@ -268,7 +414,7 @@ if [[ "${FRONTEND_ONLY}" -eq 1 ]]; then
   exit 0
 fi
 
-banner "7/9 backend (maven exec)"
+banner "8/9 backend (maven exec)"
 if [[ -f "${BACKEND_DIR}/pom.xml" ]]; then
   (
     cd "${BACKEND_DIR}"
@@ -281,7 +427,7 @@ else
   echo "backend not found, frontend done: ${OUT_DIR}"
 fi
 
-banner "8/9 summary"
+banner "9/9 summary"
 echo "[ok] root outputs: ${OUT_DIR}/lex.yy.c ${OUT_DIR}/parser_generated.cpp"
 echo "[ok] build dir: ${BUILD_DIR}"
 echo "[ok] logs dir:  ${LOG_DIR}"
