@@ -48,6 +48,40 @@ require_cmd() {
   fi
 }
 
+ensure_src_layout() {
+  local src_root="${ROOT_DIR}/src"
+  mkdir -p "${src_root}"
+
+  ensure_one_component() {
+    local name="$1"
+    local repo_url="$2"
+    local src_dir="${src_root}/${name}"
+    local legacy_dir="${ROOT_DIR}/${name}"
+    local tmp_clone_dir="${src_root}/.__clone_${name}"
+    if [[ -d "${src_dir}" ]]; then
+      return 0
+    fi
+    if [[ -d "${legacy_dir}" ]]; then
+      mv "${legacy_dir}" "${src_dir}"
+      echo "[ok] moved ${name} -> src/${name}"
+      return 0
+    fi
+    rm -rf "${tmp_clone_dir}"
+    if git clone -q "${repo_url}" "${tmp_clone_dir}" >/dev/null 2>&1; then
+      mv "${tmp_clone_dir}" "${src_dir}"
+      echo "[ok] cloned ${name} into src/${name}"
+      return 0
+    fi
+    rm -rf "${tmp_clone_dir}"
+    echo "[warn] clone failed (${name}): ${repo_url}"
+    return 0
+  }
+
+  ensure_one_component "parser_c99_yacc" "https://github.com/twilight0702/c99-yacc-lr-lalr-practice.git"
+  ensure_one_component "backend_intermediate_codegen" "https://github.com/LJR-12138/IntermediateCodeGeneration.git"
+  ensure_one_component "lexer_seulex" "https://github.com/ZhangYin256/seulex.git"
+}
+
 try_pull_repo() {
   local repo_dir="$1"
   local label="$2"
@@ -63,12 +97,44 @@ try_pull_repo() {
     echo "[warn] skip pull (${label}): no upstream set for branch '${branch:-unknown}'"
     return 0
   fi
-  echo "[info] pulling ${label} (${branch} <- ${remote_ref})"
-  if git -C "${repo_dir}" pull --ff-only --no-rebase >/dev/null 2>&1; then
-    echo "[ok] pull success (${label})"
-  else
-    echo "[warn] pull failed (${label}), continue with local code"
+
+  echo "[info] checking remote updates (${label}: ${branch} <-> ${remote_ref})"
+  if ! git -C "${repo_dir}" fetch --prune >/dev/null 2>&1; then
+    echo "[warn] fetch failed (${label}), continue with local code"
+    return 0
   fi
+
+  local counts ahead behind
+  counts=$(git -C "${repo_dir}" rev-list --left-right --count "${branch}...${remote_ref}" 2>/dev/null || echo "0 0")
+  ahead=$(awk '{print $1}' <<< "${counts}")
+  behind=$(awk '{print $2}' <<< "${counts}")
+
+  if [[ "${behind}" -eq 0 && "${ahead}" -eq 0 ]]; then
+    echo "[ok] up to date (${label})"
+    return 0
+  fi
+
+  if [[ "${behind}" -gt 0 ]]; then
+    echo "[warn] remote has updates (${label}): behind=${behind}, ahead=${ahead}"
+    local answer=""
+    if [[ -t 0 ]]; then
+      read -r -p "Update ${label} now with fast-forward pull? [y/N]: " answer
+    else
+      echo "[warn] non-interactive shell, skip update prompt (${label})"
+    fi
+    if [[ "${answer}" =~ ^[Yy]$ ]]; then
+      if git -C "${repo_dir}" pull --ff-only --no-rebase >/dev/null 2>&1; then
+        echo "[ok] pull success (${label})"
+      else
+        echo "[warn] pull failed (${label}), continue with local code"
+      fi
+    else
+      echo "[info] skipped update (${label})"
+    fi
+    return 0
+  fi
+
+  echo "[info] local branch ahead of upstream (${label}): ahead=${ahead}, behind=${behind}"
 }
 
 echo "[info] root: ${ROOT_DIR}"
@@ -83,6 +149,8 @@ require_cmd git
 if [[ "${FRONTEND_ONLY}" -eq 0 ]]; then
   require_cmd mvn
 fi
+
+ensure_src_layout
 
 # Repo sync (best effort)
 try_pull_repo "${ROOT_DIR}" "workspace"

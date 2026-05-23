@@ -53,7 +53,8 @@ Usage:
 2. 构建 `SeuLex` 与 `yacc_parse_tool`。
 3. 生成并缓存前端产物（按 `.l/.y/driver` 内容哈希，命中时直接复用，减少 parser 阶段耗时）。
 4. 运行前端并导出 token/trace。
-5. 调用后端生成 Jimple。
+5. 自动导出 YACC step9/step10 产物并执行 Python 格式转换，写入前端 `public/data/v1`。
+6. 调用后端生成 Jimple。
 
 备注：
 - 输入会自动规范化：移除预处理行（`#...`），并保证文件末尾有换行。
@@ -71,6 +72,17 @@ Usage:
 - `build/`：中间编译文件与前端可执行
 - `logs/`：`frontend.log`、`backend.log`
 - `reports/`：`runtime.tokens.rich`、`parse_trace_lalr.tsv`、`parse_reductions_lalr.txt`、`output.jimple`
+
+可视化数据会自动写入：
+- `src/parser_c99_yacc/visualizer/public/data/v1/c99_<run_name>/`
+
+然后启动前端即可查看（示例）：
+
+```bash
+cd src/parser_c99_yacc/visualizer
+npm run dev
+# 浏览器打开: http://localhost:5174/?case=c99_<run_name>
+```
 
 ## 依赖
 

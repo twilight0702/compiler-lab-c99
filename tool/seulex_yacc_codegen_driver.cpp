@@ -10,9 +10,13 @@ extern "C" int raw_yylex(void);
 int yyparse(void);
 extern "C" int yyleng;
 extern "C" int column;
+extern "C" int yylineno;
 extern "C" char yytext[];
 
 static FILE* g_tok_out = nullptr;
+static int g_prev_tok_col = 0;
+static int g_fallback_line = 1;
+static int g_seen_tokens = 0;
 
 static const char* token_name(int tok) {
     switch (tok) {
@@ -66,9 +70,22 @@ extern "C" int yylex(void) {
         tok_col = 1;
     }
 
+    // Some lexer specs only maintain `column` (no yylineno updates).
+    // Fallback: when token column moves backward, treat it as a new line.
+    if (g_seen_tokens > 0 && tok_col <= g_prev_tok_col) {
+        ++g_fallback_line;
+    }
+    g_prev_tok_col = tok_col;
+    ++g_seen_tokens;
+
+    int tok_line = yylineno;
+    if (tok_line <= 1) {
+        tok_line = g_fallback_line;
+    }
+
     std::fprintf(g_tok_out, "%s ", name);
     write_escaped_lexeme(g_tok_out, yytext, yyleng);
-    std::fprintf(g_tok_out, " %d %d\n", 0, tok_col);
+    std::fprintf(g_tok_out, " %d %d\n", tok_line, tok_col);
     return tok;
 }
 

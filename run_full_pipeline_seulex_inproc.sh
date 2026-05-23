@@ -23,6 +23,27 @@ Usage:
 USAGE
 }
 
+preflight_check_paths() {
+  local failed=0
+  if [[ ! -d "${SEULEX_DIR}" ]]; then
+    echo "[error] lexer_seulex dir not found: ${SEULEX_DIR}" >&2
+    failed=1
+  fi
+  if [[ ! -d "${YACC_DIR}" ]]; then
+    echo "[error] parser_c99_yacc dir not found: ${YACC_DIR}" >&2
+    failed=1
+  fi
+  if [[ ! -f "${DRIVER_CPP}" ]]; then
+    echo "[error] driver cpp not found: ${DRIVER_CPP}" >&2
+    failed=1
+  fi
+  if [[ ${failed} -ne 0 ]]; then
+    echo "[hint] repository layout is invalid or submodules are missing." >&2
+    echo "[hint] try: git submodule update --init --recursive" >&2
+    exit 1
+  fi
+}
+
 if [[ $# -lt 1 ]]; then
   usage
   exit 1
@@ -30,7 +51,7 @@ fi
 
 INPUT_C=""
 LEX_FILE="${ROOT_DIR}/src/lexer_seulex/extracted_testcases/full_pipeline_case/test/c99.l"
-YACC_FILE="${ROOT_DIR}/src/lexer_seulex/extracted_testcases/full_pipeline_case/test/c99.y"
+YACC_FILE="${ROOT_DIR}/src/parser_c99_yacc/c99.y"
 FRONTEND_ONLY=0
 
 while [[ $# -gt 0 ]]; do
@@ -62,6 +83,7 @@ SEULEX_BIN="${SEULEX_DIR}/build/SeuLex"
 YACC_TOOL="${YACC_DIR}/build/src/yacc_parse_tool"
 DRIVER_CPP="${ROOT_DIR}/tool/seulex_yacc_codegen_driver.cpp"
 ENV_SYNC_TOOL="${ROOT_DIR}/tool/check_env_and_sync.sh"
+VIS_PIPELINE_TOOL="${ROOT_DIR}/tool/prepare_yacc_visualization.sh"
 CACHE_ROOT="${ROOT_DIR}/.cache/seulex_codegen"
 
 banner "路径与输入"
@@ -93,6 +115,7 @@ if [[ -x "${ENV_SYNC_TOOL}" ]]; then
 else
   echo "[warn] env/sync tool not found: ${ENV_SYNC_TOOL}"
 fi
+preflight_check_paths
 
 banner "1/9 build tools"
 cmake -S "${SEULEX_DIR}" -B "${SEULEX_DIR}/build" -DSEULEX_BUILD_TESTS=ON >/dev/null
@@ -200,20 +223,32 @@ cp -f "${REPORT_DIR}/runtime.tokens.rich" "${BACKEND_REL_TOKENS_DIR}/c99_output.
 cp -f "${REPORT_DIR}/runtime.tokens.rich" "${BACKEND_REL_TOKENS_DIR}/c99_${RUN_NAME}.tokens"
 echo "[ok] synced backend-relative token: ${BACKEND_REL_TOKENS_DIR}/c99_output.tokens"
 
+banner "6/9 export parser traces"
+VIS_CASE_ID="c99_${RUN_NAME}"
+VIS_ARTIFACTS_ROOT="${REPORT_DIR}/artifacts/yacc"
+VIS_DATA_ROOT="${YACC_DIR}/visualizer/public/data/v1"
+if [[ -x "${VIS_PIPELINE_TOOL}" ]]; then
+  "${VIS_PIPELINE_TOOL}" \
+    --yacc-tool "${YACC_TOOL}" \
+    --yacc-file "${YACC_FILE}" \
+    --tokens "${REPORT_DIR}/runtime.tokens.rich" \
+    --case "${VIS_CASE_ID}" \
+    --artifacts-root "${VIS_ARTIFACTS_ROOT}" \
+    --visualizer-data-root "${VIS_DATA_ROOT}"
+else
+  echo "[warn] visualizer pipeline tool not found: ${VIS_PIPELINE_TOOL}"
+fi
+cp -f "${VIS_ARTIFACTS_ROOT}/step9/${VIS_CASE_ID}/raw/parse_trace_lalr.tsv" "${REPORT_DIR}/parse_trace_lalr.tsv"
+cp -f "${VIS_ARTIFACTS_ROOT}/step9/${VIS_CASE_ID}/raw/parse_reductions_lalr.txt" "${REPORT_DIR}/parse_reductions_lalr.txt"
+echo "[ok] generated: ${REPORT_DIR}/parse_trace_lalr.tsv"
+echo "[ok] visualizer case: ${VIS_CASE_ID}"
+echo "[ok] visualizer data: ${VIS_DATA_ROOT}/${VIS_CASE_ID}"
+
 if [[ "${FRONTEND_ONLY}" -eq 1 ]]; then
   banner "done"
-  echo "done(frontend only): ${OUT_DIR}"
+  echo "done(frontend+visualizer only): ${OUT_DIR}"
   exit 0
 fi
-
-banner "6/9 export parser traces"
-"${YACC_TOOL}" run "${YACC_FILE}" \
-  --parse-tokens "${REPORT_DIR}/runtime.tokens.rich" \
-  --export \
-  --export-dir "${REPORT_DIR}/artifacts" >/dev/null
-cp -f "${REPORT_DIR}/artifacts/raw/parse_trace_lalr.tsv" "${REPORT_DIR}/parse_trace_lalr.tsv"
-cp -f "${REPORT_DIR}/artifacts/raw/parse_reductions_lalr.txt" "${REPORT_DIR}/parse_reductions_lalr.txt"
-echo "[ok] generated: ${REPORT_DIR}/parse_trace_lalr.tsv"
 
 banner "7/9 backend (maven exec)"
 if [[ -f "${BACKEND_DIR}/pom.xml" ]]; then
