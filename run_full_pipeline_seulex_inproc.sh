@@ -118,10 +118,10 @@ fi
 preflight_check_paths
 
 banner "1/9 build tools"
-cmake -S "${SEULEX_DIR}" -B "${SEULEX_DIR}/build" -DSEULEX_BUILD_TESTS=ON >/dev/null
-cmake --build "${SEULEX_DIR}/build" -j >/dev/null
-cmake -S "${YACC_DIR}" -B "${YACC_DIR}/build" >/dev/null
-cmake --build "${YACC_DIR}/build" -j >/dev/null
+cmake -S "${SEULEX_DIR}" -B "${SEULEX_DIR}/build" -DSEULEX_BUILD_TESTS=ON 2>&1 | tee "${LOG_DIR}/cmake_seulex_config.log"
+cmake --build "${SEULEX_DIR}/build" -j 2>&1 | tee "${LOG_DIR}/cmake_seulex_build.log"
+cmake -S "${YACC_DIR}" -B "${YACC_DIR}/build" 2>&1 | tee "${LOG_DIR}/cmake_yacc_config.log"
+cmake --build "${YACC_DIR}/build" -j 2>&1 | tee "${LOG_DIR}/cmake_yacc_build.log"
 
 [[ -x "${SEULEX_BIN}" ]] || { echo "SeuLex not found: ${SEULEX_BIN}" >&2; exit 1; }
 [[ -x "${YACC_TOOL}" ]] || { echo "yacc_parse_tool not found: ${YACC_TOOL}" >&2; exit 1; }
@@ -145,14 +145,32 @@ else
   "${YACC_TOOL}" emit "${YACC_FILE}" \
     --emit-y-tab-h "${BUILD_DIR}/y.tab.h" \
     --emit-token-cases-inc "${BUILD_DIR}/token_cases.inc" \
-    --emit-parser-cpp "${OUT_DIR}/parser_generated.cpp" >/dev/null
+    --emit-parser-cpp "${OUT_DIR}/parser_generated.cpp" 2>&1 | tee "${LOG_DIR}/yacc_emit.log"
   cp -f "${BUILD_DIR}/y.tab.h" "${BUILD_DIR}/c99.tab.h"
   echo "[ok] generated: parser_generated.cpp (root), y.tab.h/token_cases.inc (build/)"
 
   banner "3/9 generate scanner by SeuLex"
-  "${SEULEX_BIN}" -o "${OUT_DIR}/lex.yy.c" "${LEX_FILE}" >/dev/null
+  "${SEULEX_BIN}" -o "${OUT_DIR}/lex.yy.c" "${LEX_FILE}" 2>&1 | tee "${LOG_DIR}/seulex_emit.log"
   # Expose yytext to the fixed driver wrapper.
   sed -i 's/^static char yytext\[/char yytext[/' "${OUT_DIR}/lex.yy.c"
+  # SeuLex output may call helper functions before their definitions under -std=c11.
+  # Inject forward declarations and an error() fallback without modifying .l/.y sources.
+  if ! rg -n "^[[:space:]]*void[[:space:]]+comment[[:space:]]*\\(void\\)[[:space:]]*;" "${OUT_DIR}/lex.yy.c" >/dev/null 2>&1; then
+    sed -i '/#include ".*tab.h"/a\
+void comment(void);\
+int check_type(void);\
+void error(const char *msg);' "${OUT_DIR}/lex.yy.c"
+  fi
+  if ! rg -n "^[[:space:]]*void[[:space:]]+error[[:space:]]*\\(" "${OUT_DIR}/lex.yy.c" >/dev/null 2>&1; then
+    cat >> "${OUT_DIR}/lex.yy.c" <<'EOF'
+
+void error(const char *msg)
+{
+    fprintf(stderr, "error: %s\n", msg);
+    exit(1);
+}
+EOF
+  fi
   echo "[ok] generated: lex.yy.c (root)"
 
   banner "4/9 build fixed frontend"
@@ -254,7 +272,7 @@ banner "7/9 backend (maven exec)"
 if [[ -f "${BACKEND_DIR}/pom.xml" ]]; then
   (
     cd "${BACKEND_DIR}"
-    mvn -q -DskipTests exec:java \
+    mvn -DskipTests compile exec:java \
       -Dexec.mainClass=com.compiler.backend.Main \
       -Dexec.args="${REPORT_DIR}"
   ) | tee "${LOG_DIR}/backend.log"

@@ -1,11 +1,11 @@
 /* Regular Definition，不构成完整的词法单元，没有对应的action */
 D			[0-9]
-L			[a-zA-Z_]
-H			[a-fA-F0-9]
-E			([Ee][+-]?{D}+)
-P           ([Pp][+-]?{D}+)
-FS			(f|F|l|L)
-IS          ((u|U)|(u|U)?(l|L|ll|LL)|(l|L|ll|LL)(u|U))
+L			[a-zA-Z_]   /* 字母 */
+H			[a-fA-F0-9]  /* 十六进制数 */
+E			([Ee][+-]?{D}+)    /* 十进制数的指数部分 */
+P           ([Pp][+-]?{D}+)  /* 十六进制数的指数部分 */
+FS			(f|F|l|L)     /*浮点数后缀*/
+IS          ((u|U)|(u|U)?(l|L|ll|LL)|(l|L|ll|LL)(u|U))  /*无符号数，长整数的后缀 */
 
 %{
 #include <stdio.h>
@@ -138,7 +138,7 @@ void comment(void)
   
 	while ((c = input()) != 0)      /* (EOF maps to 0) */
 	{
-		if (c == '/' && prev == '*')     /* 读到了注释的右边界*/
+		if (c == '/' && prev == '*')     /* 读到了注释的右边界 */
 			return;
 		prev = c;
 	}
@@ -146,7 +146,6 @@ void comment(void)
 }
 
 
-int yylineno = 1;
 int column = 0;
 
 void count(void) /*记录当前位于第几列*/
@@ -155,10 +154,7 @@ void count(void) /*记录当前位于第几列*/
 
 	for (i = 0; yytext[i] != '\0'; i++)         /* '\0'表示结束符或空格符*/
 		if (yytext[i] == '\n')
-		{
-			yylineno++;
 			column = 0;
-		}
 		else if (yytext[i] == '\t')
 			column += 8 - (column % 8);
 		else
