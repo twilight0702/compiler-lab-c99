@@ -3,11 +3,12 @@ set -euo pipefail
 
 ROOT_DIR=""
 FRONTEND_ONLY=0
+SKIP_REPO_CHECK=0
 
 usage() {
   cat <<USAGE
 Usage:
-  $0 --root <repo_root> [--frontend-only]
+  $0 --root <repo_root> [--frontend-only] [--skip-repo-check]
 USAGE
 }
 
@@ -19,6 +20,9 @@ while [[ $# -gt 0 ]]; do
       ;;
     --frontend-only)
       FRONTEND_ONLY=1
+      ;;
+    --skip-repo-check)
+      SKIP_REPO_CHECK=1
       ;;
     -h|--help)
       usage
@@ -139,6 +143,7 @@ try_pull_repo() {
 
 echo "[info] root: ${ROOT_DIR}"
 echo "[info] frontend_only: ${FRONTEND_ONLY}"
+echo "[info] skip_repo_check: ${SKIP_REPO_CHECK}"
 
 # Environment checks
 require_cmd cmake
@@ -153,7 +158,11 @@ fi
 ensure_src_layout
 
 # Repo sync (best effort)
-try_pull_repo "${ROOT_DIR}" "workspace"
-try_pull_repo "${ROOT_DIR}/src/parser_c99_yacc" "parser_c99_yacc"
-try_pull_repo "${ROOT_DIR}/src/backend_intermediate_codegen" "backend_intermediate_codegen"
-try_pull_repo "${ROOT_DIR}/src/lexer_seulex" "lexer_seulex"
+if [[ "${SKIP_REPO_CHECK}" -eq 1 ]]; then
+  echo "[info] skip repo sync/check by flag: --skip-repo-check"
+else
+  try_pull_repo "${ROOT_DIR}" "workspace"
+  try_pull_repo "${ROOT_DIR}/src/parser_c99_yacc" "parser_c99_yacc"
+  try_pull_repo "${ROOT_DIR}/src/backend_intermediate_codegen" "backend_intermediate_codegen"
+  try_pull_repo "${ROOT_DIR}/src/lexer_seulex" "lexer_seulex"
+fi
