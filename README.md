@@ -62,7 +62,7 @@ Usage:
 
 ## 输出目录（重点）
 
-每次运行生成：`output/seulex_codegen_YYYYMMDD_HHMMSS/`
+每次运行生成：`output/YYYYMMDD_HHMMSS_mmm/`
 
 根目录仅保留两个核心源码：
 - `lex.yy.c`
