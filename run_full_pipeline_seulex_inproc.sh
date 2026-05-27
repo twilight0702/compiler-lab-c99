@@ -244,137 +244,48 @@ EOF
 
   banner "5/9 dump full tokens (lexer-only)"
   TOKEN_DUMP_MAIN_C="${BUILD_DIR}/token_dump_main.c"
+  TOKEN_DUMP_MAIN_TEMPLATE="${ROOT_DIR}/tool/token_dump_main.c"
   TOKEN_DUMPER_BIN="${BUILD_DIR}/token_dumper"
-  cat > "${TOKEN_DUMP_MAIN_C}" <<'C_EOF'
-#include <ctype.h>
-#include <stdio.h>
-#include <stdlib.h>
+  if [[ ! -f "${TOKEN_DUMP_MAIN_TEMPLATE}" ]]; then
+    echo "[error] token dump template missing: ${TOKEN_DUMP_MAIN_TEMPLATE}" >&2
+    exit 1
+  fi
+  cp -f "${TOKEN_DUMP_MAIN_TEMPLATE}" "${TOKEN_DUMP_MAIN_C}"
 
-#include "y.tab.h"
+  TOKEN_DUMP_LEX_OBJ="${BUILD_DIR}/lex.yy.token_dump.o"
+  cc -std=gnu89 -w -I"${BUILD_DIR}" -c "${OUT_DIR}/lex.yy.c" -o "${TOKEN_DUMP_LEX_OBJ}"
 
-int yylex(void);
-extern char yytext[];
-extern int yyleng;
-extern int yylineno;
-extern int column;
-
+  TOKEN_DUMP_COMPAT_OBJ=""
+  TOKEN_DUMP_COMPAT_SRC="${BUILD_DIR}/token_dump_compat.c"
+  : > "${TOKEN_DUMP_COMPAT_SRC}"
+  echo "#include <stdio.h>" >> "${TOKEN_DUMP_COMPAT_SRC}"
+  echo "#include \"y.tab.h\"" >> "${TOKEN_DUMP_COMPAT_SRC}"
+  if ! nm -g "${TOKEN_DUMP_LEX_OBJ}" | rg -q "^[0-9A-Fa-f]+[[:space:]]+[A-Za-z][[:space:]]+yylineno$"; then
+    echo "int yylineno = 1;" >> "${TOKEN_DUMP_COMPAT_SRC}"
+  fi
+  if ! nm -g "${TOKEN_DUMP_LEX_OBJ}" | rg -q "^[0-9A-Fa-f]+[[:space:]]+[A-Za-z][[:space:]]+column$"; then
+    echo "int column = 1;" >> "${TOKEN_DUMP_COMPAT_SRC}"
+  fi
+  if ! nm -g "${TOKEN_DUMP_LEX_OBJ}" | rg -q "^[0-9A-Fa-f]+[[:space:]]+[A-Za-z][[:space:]]+yylval$"; then
+    echo "YYSTYPE yylval;" >> "${TOKEN_DUMP_COMPAT_SRC}"
+  fi
+  if nm -g "${TOKEN_DUMP_LEX_OBJ}" | rg -q "^[[:space:]]*U[[:space:]]+error$"; then
+    cat >> "${TOKEN_DUMP_COMPAT_SRC}" <<'C_EOF'
 void error(const char *s) {
   if (s) {
     fprintf(stderr, "lexer error: %s\n", s);
   }
 }
-
-static const char *token_name(int tok) {
-  switch (tok) {
-#include "token_cases.inc"
-    default:
-      return NULL;
-  }
-}
-
-static void printable_char_token(int tok, char buf[16]) {
-  unsigned char ch = (unsigned char)tok;
-  if (ch == '\\' || ch == '\'') {
-    snprintf(buf, 16, "'%c%c'", '\\', ch);
-  } else if (isprint(ch)) {
-    snprintf(buf, 16, "'%c'", ch);
-  } else {
-    snprintf(buf, 16, "'\\x%02X'", ch);
-  }
-}
-
-static void write_escaped_lexeme(FILE *out, const char *src) {
-  const unsigned char *p = (const unsigned char *)src;
-  while (*p) {
-    unsigned char ch = *p++;
-    if (ch == '\\') {
-      fputs("\\\\", out);
-    } else if (ch == '"') {
-      fputs("\\\"", out);
-    } else if (ch == '\n') {
-      fputs("\\n", out);
-    } else if (ch == '\t') {
-      fputs("\\t", out);
-    } else if (ch == '\r') {
-      fputs("\\r", out);
-    } else if (ch == ' ') {
-      fputs("\\s", out);
-    } else {
-      fputc((int)ch, out);
-    }
-  }
-}
-
-int main(int argc, char **argv) {
-  if (argc != 3) {
-    fprintf(stderr, "Usage: %s <input.c> <out.tokens>\n", argv[0]);
-    return 1;
-  }
-
-  if (!freopen(argv[1], "rb", stdin)) {
-    perror("freopen stdin");
-    return 1;
-  }
-
-  FILE *out = fopen(argv[2], "wb");
-  if (!out) {
-    perror("open out.tokens");
-    return 1;
-  }
-
-  int tok;
-  while ((tok = yylex()) != 0) {
-    const char *name = token_name(tok);
-    char char_name_buf[16];
-    int tok_col;
-    if (!name) {
-      if (tok >= 0 && tok < 256) {
-        printable_char_token(tok, char_name_buf);
-        name = char_name_buf;
-      } else {
-        fprintf(stderr, "Unknown token id: %d\n", tok);
-        fclose(out);
-        return 2;
-      }
-    }
-
-    tok_col = column - yyleng + 1;
-    if (tok_col < 1) {
-      tok_col = 1;
-    }
-    fprintf(out, "%s ", name);
-    write_escaped_lexeme(out, yytext);
-    fprintf(out, " %d %d\n", yylineno, tok_col);
-  }
-
-  fclose(out);
-  return 0;
-}
 C_EOF
-
-  TOKEN_DUMP_COMPAT_OBJ=""
-  if ! rg -n "^[[:space:]]*int[[:space:]]+yylineno[[:space:]]*=" "${LEX_FILE}" >/dev/null 2>&1 || \
-     ! rg -n "^[[:space:]]*int[[:space:]]+column[[:space:]]*=" "${LEX_FILE}" >/dev/null 2>&1 || \
-     ! rg -n "^[[:space:]]*YYSTYPE[[:space:]]+yylval[[:space:]]*(=|;)" "${LEX_FILE}" >/dev/null 2>&1; then
-    TOKEN_DUMP_COMPAT_SRC="${BUILD_DIR}/token_dump_compat.c"
+  fi
+  if rg -q "^(int[[:space:]]+yylineno[[:space:]]*=|int[[:space:]]+column[[:space:]]*=|YYSTYPE[[:space:]]+yylval;|void[[:space:]]+error[[:space:]]*\\()" "${TOKEN_DUMP_COMPAT_SRC}"; then
     TOKEN_DUMP_COMPAT_OBJ="${BUILD_DIR}/token_dump_compat.o"
-    : > "${TOKEN_DUMP_COMPAT_SRC}"
-    echo "#include \"y.tab.h\"" >> "${TOKEN_DUMP_COMPAT_SRC}"
-    if ! rg -n "^[[:space:]]*int[[:space:]]+yylineno[[:space:]]*=" "${LEX_FILE}" >/dev/null 2>&1; then
-      echo "int yylineno = 1;" >> "${TOKEN_DUMP_COMPAT_SRC}"
-    fi
-    if ! rg -n "^[[:space:]]*int[[:space:]]+column[[:space:]]*=" "${LEX_FILE}" >/dev/null 2>&1; then
-      echo "int column = 1;" >> "${TOKEN_DUMP_COMPAT_SRC}"
-    fi
-    if ! rg -n "^[[:space:]]*YYSTYPE[[:space:]]+yylval[[:space:]]*(=|;)" "${LEX_FILE}" >/dev/null 2>&1; then
-      echo "YYSTYPE yylval;" >> "${TOKEN_DUMP_COMPAT_SRC}"
-    fi
-    gcc -std=c11 -w -c "${TOKEN_DUMP_COMPAT_SRC}" -o "${TOKEN_DUMP_COMPAT_OBJ}"
+    gcc -std=c11 -w -I"${BUILD_DIR}" -c "${TOKEN_DUMP_COMPAT_SRC}" -o "${TOKEN_DUMP_COMPAT_OBJ}"
   fi
 
   cc -std=gnu89 -w -I"${BUILD_DIR}" \
     "${TOKEN_DUMP_MAIN_C}" \
-    "${OUT_DIR}/lex.yy.c" \
+    "${TOKEN_DUMP_LEX_OBJ}" \
     ${TOKEN_DUMP_COMPAT_OBJ:+${TOKEN_DUMP_COMPAT_OBJ}} \
     -lfl -o "${TOKEN_DUMPER_BIN}"
   "${TOKEN_DUMPER_BIN}" "${BUILD_DIR}/input.normalized.c" "${REPORT_DIR}/runtime.tokens.rich"
