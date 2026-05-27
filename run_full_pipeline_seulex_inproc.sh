@@ -349,6 +349,22 @@ fi
 
 RUN_NAME="${RUN_ID}"
 VIS_CASE_ID="c99_${RUN_NAME}"
+
+# ==== 缓存命中时 case_id 自动检测 ====
+# 当缓存命中时，reports/artifacts/yacc/step9/ 下的目录名是首次运行时的旧 case_id，
+# 而 VIS_CASE_ID 默认用当前 RUN_NAME 拼接，导致 step 8 后端找不到 ast_lalr.json。
+# 这里检查磁盘上实际存在的目录名，如果与当前 VIS_CASE_ID 不同则用实际值覆盖。
+# 不影响缓存机制本身，只确保后端路径正确。
+if [[ -d "${REPORT_DIR}/artifacts/yacc/step9" ]]; then
+  DETECTED_DIR=$(ls "${REPORT_DIR}/artifacts/yacc/step9/" 2>/dev/null | head -1)
+  if [[ -n "${DETECTED_DIR}" && "${DETECTED_DIR}" != "${VIS_CASE_ID}" ]]; then
+    echo "[info] cache hit detected, override VIS_CASE_ID: ${VIS_CASE_ID} -> ${DETECTED_DIR}"
+    VIS_CASE_ID="${DETECTED_DIR}"
+    RUN_NAME="${VIS_CASE_ID#c99_}"
+  fi
+fi
+# ==== end ====
+
 LEGACY_TOKENS_DIR="${ROOT_DIR}/c99-yacc-lr-lalr-practice/contracts/yacc/tokens"
 mkdir -p "${LEGACY_TOKENS_DIR}"
 cp -f "${REPORT_DIR}/runtime.tokens.rich" "${LEGACY_TOKENS_DIR}/c99_output.tokens"
@@ -427,13 +443,21 @@ fi
 
 banner "8/9 backend (maven exec)"
 if [[ -f "${BACKEND_DIR}/pom.xml" ]]; then
-  (
-    cd "${BACKEND_DIR}"
-    mvn -DskipTests compile exec:java \
-      -Dexec.mainClass=com.compiler.backend.Main \
-      -Dexec.args="${REPORT_DIR}"
-  ) 2>&1 | tee "${LOG_DIR}/backend.log"
-  echo "[ok] backend log: ${LOG_DIR}/backend.log"
+  AST_JSON="${REPORT_DIR}/artifacts/yacc/step9/${VIS_CASE_ID}/raw/ast_lalr.json"
+  JIMPLE_OUT="${REPORT_DIR}/output.jimple"
+  if [[ -f "${AST_JSON}" ]]; then
+    (
+      cd "${BACKEND_DIR}"
+      mvn -DskipTests compile exec:java \
+        -Dexec.mainClass=com.compiler.backend.Main \
+        -Dexec.args="${AST_JSON} ${JIMPLE_OUT}"
+    ) 2>&1 | tee "${LOG_DIR}/backend.log"
+    echo "[ok] backend log: ${LOG_DIR}/backend.log"
+    echo "[ok] jimple output: ${JIMPLE_OUT}"
+  else
+    echo "[warn] ast_lalr.json not found at: ${AST_JSON}"
+    echo "[warn] skipping backend step"
+  fi
 else
   echo "backend not found, frontend done: ${OUT_DIR}"
 fi
