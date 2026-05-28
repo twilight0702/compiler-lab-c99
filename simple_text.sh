@@ -1,5 +1,5 @@
 ./run_full_pipeline.sh \
-  --skip-repo-check \
+  --skip-submodule-check \
   --lex  simple_test/cal.l\
   --yacc simple_test/cal.y \
   --frontend-only \

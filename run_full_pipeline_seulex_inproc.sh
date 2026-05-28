@@ -39,7 +39,7 @@ json_escape() {
 usage() {
   cat <<USAGE
 Usage:
-  $0 <input.c> [--lex path/to/c99.l] [--yacc path/to/c99.y] [--frontend-only] [--skip-repo-check]
+  $0 <input.c> [--lex path/to/c99.l] [--yacc path/to/c99.y] [--frontend-only] [--skip-submodule-check]
 USAGE
 }
 
@@ -78,7 +78,7 @@ INPUT_C=""
 LEX_FILE="${ROOT_DIR}/test_input/c99.l"
 YACC_FILE="${ROOT_DIR}/test_input/c99.y"
 FRONTEND_ONLY=0
-SKIP_REPO_CHECK=0
+SKIP_SUBMODULE_CHECK=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -88,8 +88,8 @@ while [[ $# -gt 0 ]]; do
       shift; YACC_FILE="$1" ;;
     --frontend-only)
       FRONTEND_ONLY=1 ;;
-    --skip-repo-check)
-      SKIP_REPO_CHECK=1 ;;
+    --skip-submodule-check|--skip-repo-check)
+      SKIP_SUBMODULE_CHECK=1 ;;
     -h|--help)
       usage; exit 0 ;;
     *)
@@ -150,17 +150,17 @@ LEX_HASH=$(sha256_file "${LEX_FILE}")
 YACC_HASH=$(sha256_file "${YACC_FILE}")
 SCRIPT_HASH=$(sha256_file "${SCRIPT_PATH}")
 
-banner "0/9 env check & repo sync"
+banner "0/9 env check & submodule sync"
 if [[ -x "${ENV_SYNC_TOOL}" ]]; then
   if [[ "${FRONTEND_ONLY}" -eq 1 ]]; then
-    if [[ "${SKIP_REPO_CHECK}" -eq 1 ]]; then
-      "${ENV_SYNC_TOOL}" --root "${ROOT_DIR}" --frontend-only --skip-repo-check
+    if [[ "${SKIP_SUBMODULE_CHECK}" -eq 1 ]]; then
+      "${ENV_SYNC_TOOL}" --root "${ROOT_DIR}" --frontend-only --skip-submodule-check
     else
       "${ENV_SYNC_TOOL}" --root "${ROOT_DIR}" --frontend-only
     fi
   else
-    if [[ "${SKIP_REPO_CHECK}" -eq 1 ]]; then
-      "${ENV_SYNC_TOOL}" --root "${ROOT_DIR}" --skip-repo-check
+    if [[ "${SKIP_SUBMODULE_CHECK}" -eq 1 ]]; then
+      "${ENV_SYNC_TOOL}" --root "${ROOT_DIR}" --skip-submodule-check
     else
       "${ENV_SYNC_TOOL}" --root "${ROOT_DIR}"
     fi

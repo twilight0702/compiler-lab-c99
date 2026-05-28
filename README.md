@@ -16,6 +16,20 @@
 
 ## 如何使用
 
+### 首次拉取（初始化 submodule）
+
+```bash
+git submodule update --init --recursive
+```
+
+> 也可以不手动执行这个，直接执行脚本也会执行这个指令
+
+### 更新所有子模块到最新版本（直接合并）
+
+```bash
+git submodule update --remote --merge  
+```
+
 ### 完整流程（前端 + 后端）
 
 ```bash
@@ -38,18 +52,24 @@
   simple_test/cal_test.txt
 ```
 
+### 测试集运行脚本
+
+```bash
+./tests.sh
+```
+
 ### 参数
 
 ```text
 Usage:
-  ./run_full_pipeline_seulex_inproc.sh <input.c> [--lex path/to/c99.l] [--yacc path/to/c99.y] [--frontend-only]
+  ./run_full_pipeline_seulex_inproc.sh <input.c> [--lex path/to/c99.l] [--yacc path/to/c99.y] [--frontend-only] [--skip-submodule-check]
 ```
 
-## 新流程说明（脚本做了哪些事）
+## 流程说明
 
 `run_full_pipeline_seulex_inproc.sh` 会：
 
-1. 调用 `tool/check_env_and_sync.sh` 检查环境并尝试同步仓库。
+1. 调用 `tool/check_env_and_sync.sh` 检查环境并执行 `git submodule sync/update`。
 2. 构建 `SeuLex` 与 `yacc_parse_tool`。
 3. 生成并缓存前端产物（按 `.l/.y/driver` 内容哈希，命中时直接复用，减少 parser 阶段耗时）。
 4. 运行前端并导出 token/trace。
@@ -59,6 +79,7 @@ Usage:
 备注：
 - 输入会自动规范化：移除预处理行（`#...`），并保证文件末尾有换行。
 - 当 lexer 未定义 `column/yylineno` 时，脚本会自动补兼容定义。
+- 依赖仓库统一由 submodule 管理（位于 `src/*`），不再进行手动 clone/move/pull。
 
 ## 输出目录（重点）
 

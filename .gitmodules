@@ -1,0 +1,9 @@
+[submodule "src/parser_c99_yacc"]
+	path = src/parser_c99_yacc
+	url = https://github.com/twilight0702/c99-yacc-lr-lalr-practice.git
+[submodule "src/backend_intermediate_codegen"]
+	path = src/backend_intermediate_codegen
+	url = https://github.com/LJR-12138/IntermediateCodeGeneration.git
+[submodule "src/lexer_seulex"]
+	path = src/lexer_seulex
+	url = https://github.com/ZhangYin256/seulex.git
