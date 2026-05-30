@@ -60,6 +60,27 @@ Usage:
 - 输入会自动规范化：移除预处理行（`#...`），并保证文件末尾有换行。
 - 当 lexer 未定义 `column/yylineno` 时，脚本会自动补兼容定义。
 
+## 测试脚本说明
+
+项目里有两个常用测试入口，它们都只是批量调用 `run_full_pipeline_seulex_inproc.sh`，区别在于测试集和组织方式：
+
+- `tests.sh`
+  - 适合快速跑一组手工挑选的样例。
+  - 包含基础 C 样例、较复杂样例、仅前端样例，以及 `mini_ctrl` / `mini_func` 等边界样例。
+  - 默认串行执行，每个样例都会单独输出一段运行日志。
+
+- `tests_c99_batch.sh`
+  - 适合批量回归一组 C99 样例。
+  - 默认扫描 `test_input/c99_batch_cases/` 下的固定样例列表。
+  - 每个样例的日志会写到 `output/c99_batch_logs/`，便于单独排查失败项。
+
+运行方式示例：
+
+```bash
+./tests.sh
+./tests_c99_batch.sh
+```
+
 ## 输出目录（重点）
 
 每次运行生成：`output/YYYYMMDD_HHMMSS_mmm/`

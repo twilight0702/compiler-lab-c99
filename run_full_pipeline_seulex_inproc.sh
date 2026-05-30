@@ -291,52 +291,59 @@ C_EOF
   "${TOKEN_DUMPER_BIN}" "${BUILD_DIR}/input.normalized.c" "${REPORT_DIR}/runtime.tokens.rich"
   echo "[ok] generated(full token stream): ${REPORT_DIR}/runtime.tokens.rich"
 
-  banner "6/9 run frontend (lexer+parser)"
-  VIS_CASE_ID="c99_${RUN_ID}"
-  VIS_STEP9_DIR="${REPORT_DIR}/artifacts/yacc/step9/${VIS_CASE_ID}"
-  set +e
-  "${YACC_TOOL}" run "${YACC_FILE}" \
-    --parse-tokens "${REPORT_DIR}/runtime.tokens.rich" \
-    --export-dir "${VIS_STEP9_DIR}" 2>&1 | tee "${LOG_DIR}/frontend.log"
-  FRONTEND_RC=${PIPESTATUS[0]}
-  set -e
-  echo "[ok] log: ${LOG_DIR}/frontend.log"
-  echo "[info] frontend rc: ${FRONTEND_RC}"
-  if [[ ${FRONTEND_RC} -ne 0 ]]; then
-    echo "[warn] frontend reported non-zero exit (${FRONTEND_RC})"
-  fi
+fi
 
-  cp -f "${REPORT_DIR}/runtime.tokens.rich" "${REPORT_DIR}/runtime.tokens.consumed.rich"
-  echo "[ok] generated(consumed token stream): ${REPORT_DIR}/runtime.tokens.consumed.rich"
+RUN_NAME="${RUN_ID}"
+VIS_CASE_ID="${RUN_NAME}"
 
-  banner "7/9 export parser traces"
-  VIS_ARTIFACTS_ROOT="${REPORT_DIR}/artifacts/yacc"
-  VIS_DATA_ROOT="${YACC_DIR}/visualizer/public/data/v1"
-  VIS_LATEST_FILE="${VIS_DATA_ROOT}/latest.json"
-  if [[ -x "${VIS_PIPELINE_TOOL}" ]]; then
-    "${VIS_PIPELINE_TOOL}" \
-      --yacc-tool "${YACC_TOOL}" \
-      --yacc-file "${YACC_FILE}" \
-      --tokens "${REPORT_DIR}/runtime.tokens.rich" \
-      --case "${VIS_CASE_ID}" \
-      --artifacts-root "${VIS_ARTIFACTS_ROOT}" \
-      --visualizer-data-root "${VIS_DATA_ROOT}"
-    cat > "${VIS_LATEST_FILE}" <<EOF
+banner "6/9 run frontend (lexer+parser)"
+VIS_STEP9_DIR="${REPORT_DIR}/artifacts/yacc/step9/${VIS_CASE_ID}"
+set +e
+"${YACC_TOOL}" run "${YACC_FILE}" \
+  --parse-tokens "${REPORT_DIR}/runtime.tokens.rich" \
+  --export-dir "${VIS_STEP9_DIR}" 2>&1 | tee "${LOG_DIR}/frontend.log"
+FRONTEND_RC=${PIPESTATUS[0]}
+set -e
+echo "[ok] log: ${LOG_DIR}/frontend.log"
+echo "[info] frontend rc: ${FRONTEND_RC}"
+if [[ ${FRONTEND_RC} -ne 0 ]]; then
+  echo "[warn] frontend reported non-zero exit (${FRONTEND_RC})"
+fi
+
+cp -f "${REPORT_DIR}/runtime.tokens.rich" "${REPORT_DIR}/runtime.tokens.consumed.rich"
+echo "[ok] generated(consumed token stream): ${REPORT_DIR}/runtime.tokens.consumed.rich"
+
+banner "7/9 export parser traces"
+VIS_ARTIFACTS_ROOT="${REPORT_DIR}/artifacts/yacc"
+VIS_DATA_ROOT="${YACC_DIR}/visualizer/public/data/v1"
+VIS_LATEST_FILE="${VIS_DATA_ROOT}/latest.json"
+if [[ -x "${VIS_PIPELINE_TOOL}" ]]; then
+  "${VIS_PIPELINE_TOOL}" \
+    --yacc-tool "${YACC_TOOL}" \
+    --yacc-file "${YACC_FILE}" \
+    --tokens "${REPORT_DIR}/runtime.tokens.rich" \
+    --case "${VIS_CASE_ID}" \
+    --artifacts-root "${VIS_ARTIFACTS_ROOT}" \
+    --visualizer-data-root "${VIS_DATA_ROOT}"
+  cat > "${VIS_LATEST_FILE}" <<EOF
 {
   "case_id": "${VIS_CASE_ID}",
   "updated_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 EOF
-    echo "[ok] visualizer latest pointer: ${VIS_LATEST_FILE} -> ${VIS_CASE_ID}"
-  else
-    echo "[warn] visualizer pipeline tool not found: ${VIS_PIPELINE_TOOL}"
-  fi
-  cp -f "${VIS_ARTIFACTS_ROOT}/step9/${VIS_CASE_ID}/raw/parse_trace_lalr.tsv" "${REPORT_DIR}/parse_trace_lalr.tsv"
-  cp -f "${VIS_ARTIFACTS_ROOT}/step9/${VIS_CASE_ID}/raw/parse_reductions_lalr.txt" "${REPORT_DIR}/parse_reductions_lalr.txt"
-  echo "[ok] generated: ${REPORT_DIR}/parse_trace_lalr.tsv"
-  echo "[ok] visualizer case: ${VIS_CASE_ID}"
-  echo "[ok] visualizer data: ${VIS_DATA_ROOT}/${VIS_CASE_ID}"
+  echo "[ok] visualizer latest pointer: ${VIS_LATEST_FILE} -> ${VIS_CASE_ID}"
+else
+  echo "[warn] visualizer pipeline tool not found: ${VIS_PIPELINE_TOOL}"
+fi
+cp -f "${VIS_ARTIFACTS_ROOT}/step9/${VIS_CASE_ID}/raw/parse_trace_lalr.tsv" "${REPORT_DIR}/parse_trace_lalr.tsv"
+cp -f "${VIS_ARTIFACTS_ROOT}/step9/${VIS_CASE_ID}/raw/parse_reductions_lalr.txt" "${REPORT_DIR}/parse_reductions_lalr.txt"
+cp -f "${OUT_DIR}/input.c" "${VIS_DATA_ROOT}/${VIS_CASE_ID}/input.c"
+cp -f "${LEX_FILE}" "${VIS_DATA_ROOT}/${VIS_CASE_ID}/lexer.l"
+echo "[ok] generated: ${REPORT_DIR}/parse_trace_lalr.tsv"
+echo "[ok] visualizer case: ${VIS_CASE_ID}"
+echo "[ok] visualizer data: ${VIS_DATA_ROOT}/${VIS_CASE_ID}"
 
+if [[ ${CACHE_HIT} -eq 0 ]]; then
   rm -rf "${CACHE_ENTRY_DIR}/payload.tmp"
   mkdir -p "${CACHE_ENTRY_DIR}/payload.tmp"
   cp -af "${OUT_DIR}/lex.yy.c" "${CACHE_ENTRY_DIR}/payload.tmp/" 2>/dev/null || true
@@ -346,24 +353,6 @@ EOF
   rm -rf "${CACHE_ENTRY_DIR}/payload"
   mv "${CACHE_ENTRY_DIR}/payload.tmp" "${CACHE_ENTRY_DIR}/payload"
 fi
-
-RUN_NAME="${RUN_ID}"
-VIS_CASE_ID="c99_${RUN_NAME}"
-
-# ==== 缓存命中时 case_id 自动检测 ====
-# 当缓存命中时，reports/artifacts/yacc/step9/ 下的目录名是首次运行时的旧 case_id，
-# 而 VIS_CASE_ID 默认用当前 RUN_NAME 拼接，导致 step 8 后端找不到 ast_lalr.json。
-# 这里检查磁盘上实际存在的目录名，如果与当前 VIS_CASE_ID 不同则用实际值覆盖。
-# 不影响缓存机制本身，只确保后端路径正确。
-if [[ -d "${REPORT_DIR}/artifacts/yacc/step9" ]]; then
-  DETECTED_DIR=$(ls "${REPORT_DIR}/artifacts/yacc/step9/" 2>/dev/null | head -1)
-  if [[ -n "${DETECTED_DIR}" && "${DETECTED_DIR}" != "${VIS_CASE_ID}" ]]; then
-    echo "[info] cache hit detected, override VIS_CASE_ID: ${VIS_CASE_ID} -> ${DETECTED_DIR}"
-    VIS_CASE_ID="${DETECTED_DIR}"
-    RUN_NAME="${VIS_CASE_ID#c99_}"
-  fi
-fi
-# ==== end ====
 
 LEGACY_TOKENS_DIR="${ROOT_DIR}/c99-yacc-lr-lalr-practice/contracts/yacc/tokens"
 mkdir -p "${LEGACY_TOKENS_DIR}"
@@ -454,6 +443,10 @@ if [[ -f "${BACKEND_DIR}/pom.xml" ]]; then
     ) 2>&1 | tee "${LOG_DIR}/backend.log"
     echo "[ok] backend log: ${LOG_DIR}/backend.log"
     echo "[ok] jimple output: ${JIMPLE_OUT}"
+    if [[ -d "${YACC_DIR}/visualizer/public/data/v1/${VIS_CASE_ID}" ]]; then
+      cp -f "${JIMPLE_OUT}" "${YACC_DIR}/visualizer/public/data/v1/${VIS_CASE_ID}/output.jimple"
+      echo "[ok] synced visualizer jimple: ${YACC_DIR}/visualizer/public/data/v1/${VIS_CASE_ID}/output.jimple"
+    fi
   else
     echo "[warn] ast_lalr.json not found at: ${AST_JSON}"
     echo "[warn] skipping backend step"
